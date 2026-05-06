@@ -132,7 +132,7 @@ fn tempdir() -> PathBuf {
         .join(format!("c2rust_helper_test_{}", std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
-            .subsec_nanos()));
+            .as_nanos()));
     fs::create_dir_all(&p).unwrap();
     p
 }
