@@ -125,6 +125,319 @@ tests: []
     assert!(cfg.tests.is_empty());
 }
 
+#[test]
+fn test_config_parse_test_entry() {
+    let yaml = r#"
+version: 1
+project:
+  root: .
+  feature: default
+feature_source:
+  kind: c2rust_feature
+  root: ./.c2rust/default
+tests:
+  - c_test: test_add
+    source_file: tests/c/test_math.c
+    status: ported
+    module: mod_math
+    symbols:
+      - add
+    rust_tests:
+      - test_add_ported
+  - c_test: test_sub
+    status: pending
+  - c_test: test_deprecated
+    status: skipped
+    notes: "removed from upstream"
+  - c_test: test_platform_specific
+    status: not_applicable
+    notes: "Linux only"
+"#;
+    let tmp = tempdir();
+    let cfg_path = tmp.join("migration.yml");
+    fs::write(&cfg_path, yaml).unwrap();
+
+    let cfg = crate::config::load_config(&cfg_path).expect("parse should succeed");
+    assert_eq!(cfg.tests.len(), 4);
+
+    let t0 = &cfg.tests[0];
+    assert_eq!(t0.c_test, "test_add");
+    assert_eq!(t0.status, crate::config::TestStatus::Ported);
+    assert_eq!(t0.module.as_deref(), Some("mod_math"));
+    assert_eq!(t0.symbols, vec!["add"]);
+    assert_eq!(t0.rust_tests, vec!["test_add_ported"]);
+
+    let t1 = &cfg.tests[1];
+    assert_eq!(t1.c_test, "test_sub");
+    assert_eq!(t1.status, crate::config::TestStatus::Pending);
+
+    let t2 = &cfg.tests[2];
+    assert_eq!(t2.status, crate::config::TestStatus::Skipped);
+    assert_eq!(t2.notes.as_deref(), Some("removed from upstream"));
+
+    let t3 = &cfg.tests[3];
+    assert_eq!(t3.status, crate::config::TestStatus::NotApplicable);
+}
+
+// ── collect tests ─────────────────────────────────────────────────────────────
+
+#[test]
+fn test_collect_discovers_tests() {
+    let tmp = tempdir();
+
+    // Create project root with C test files.
+    let project_root = tmp.join("project");
+    let tests_dir = project_root.join("tests").join("c");
+    fs::create_dir_all(&tests_dir).unwrap();
+    fs::write(
+        tests_dir.join("test_math.c"),
+        "void test_add() {}\nvoid test_sub() {}\n",
+    )
+    .unwrap();
+
+    // Create a minimal feature workspace.
+    let feature_root = tmp.join("feature");
+    let meta = feature_root.join("meta");
+    fs::create_dir_all(&meta).unwrap();
+    fs::write(meta.join("selected_files.json"), "[]").unwrap();
+    fs::create_dir_all(feature_root.join("rust").join("src")).unwrap();
+
+    let yaml = format!(
+        r#"
+version: 1
+project:
+  root: {project}
+  feature: feature
+feature_source:
+  kind: c2rust_feature
+  root: {feat}
+discovery:
+  paths:
+    - tests/c
+  extensions:
+    - c
+  patterns:
+    - regex: 'void\s+(test_\w+)\s*\(\)'
+      framework: custom
+tests: []
+"#,
+        project = project_root.display(),
+        feat = feature_root.display()
+    );
+
+    let cfg_path = tmp.join("migration.yml");
+    fs::write(&cfg_path, &yaml).unwrap();
+
+    let mut cfg = crate::config::load_config(&cfg_path).unwrap();
+    let added = crate::collect::collect_tests(&mut cfg, &cfg_path).unwrap();
+
+    assert_eq!(added, 2, "should discover 2 new tests");
+    let names: Vec<&str> = cfg.tests.iter().map(|t| t.c_test.as_str()).collect();
+    assert!(names.contains(&"test_add"), "test_add should be found");
+    assert!(names.contains(&"test_sub"), "test_sub should be found");
+}
+
+#[test]
+fn test_collect_is_idempotent() {
+    let tmp = tempdir();
+
+    let project_root = tmp.join("project");
+    let tests_dir = project_root.join("tests").join("c");
+    fs::create_dir_all(&tests_dir).unwrap();
+    fs::write(tests_dir.join("test_math.c"), "void test_add() {}\n").unwrap();
+
+    let feature_root = tmp.join("feature");
+    let meta = feature_root.join("meta");
+    fs::create_dir_all(&meta).unwrap();
+    fs::write(meta.join("selected_files.json"), "[]").unwrap();
+    fs::create_dir_all(feature_root.join("rust").join("src")).unwrap();
+
+    // Pre-populate the manifest with test_add already present.
+    let yaml = format!(
+        r#"
+version: 1
+project:
+  root: {project}
+  feature: feature
+feature_source:
+  kind: c2rust_feature
+  root: {feat}
+discovery:
+  paths:
+    - tests/c
+  extensions:
+    - c
+  patterns:
+    - regex: 'void\s+(test_\w+)\s*\(\)'
+      framework: custom
+tests:
+  - c_test: test_add
+    status: ported
+    rust_tests:
+      - test_add_rust
+"#,
+        project = project_root.display(),
+        feat = feature_root.display()
+    );
+
+    let cfg_path = tmp.join("migration.yml");
+    fs::write(&cfg_path, &yaml).unwrap();
+
+    let mut cfg = crate::config::load_config(&cfg_path).unwrap();
+    let added = crate::collect::collect_tests(&mut cfg, &cfg_path).unwrap();
+
+    assert_eq!(added, 0, "nothing new should be added on second run");
+    assert_eq!(cfg.tests.len(), 1);
+    // The existing entry must be untouched.
+    assert_eq!(cfg.tests[0].status, crate::config::TestStatus::Ported);
+    assert_eq!(cfg.tests[0].rust_tests, vec!["test_add_rust"]);
+}
+
+// ── lint tests ────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_lint_passes_on_valid_manifest() {
+    let tmp = tempdir();
+    let root = make_feature_workspace(&tmp);
+    let index = crate::feature::loader::load(&root).unwrap();
+
+    let yaml = r#"
+version: 1
+project:
+  root: .
+  feature: default
+feature_source:
+  kind: c2rust_feature
+  root: .
+tests:
+  - c_test: test_add
+    status: ported
+    selected_file: src/alpha.c
+    module: mod_alpha
+    symbols:
+      - add
+    rust_tests:
+      - rust_test_add
+  - c_test: test_skip
+    status: skipped
+    notes: "not applicable"
+"#;
+    let cfg_path = tmp.join("migration.yml");
+    fs::write(&cfg_path, yaml).unwrap();
+    let cfg = crate::config::load_config(&cfg_path).unwrap();
+
+    assert!(crate::lint::lint(&cfg, &index).is_ok());
+}
+
+#[test]
+fn test_lint_catches_missing_module() {
+    let tmp = tempdir();
+    let root = make_feature_workspace(&tmp);
+    let index = crate::feature::loader::load(&root).unwrap();
+
+    let yaml = r#"
+version: 1
+project:
+  root: .
+  feature: default
+feature_source:
+  kind: c2rust_feature
+  root: .
+tests:
+  - c_test: test_foo
+    module: mod_nonexistent
+"#;
+    let cfg_path = tmp.join("migration.yml");
+    fs::write(&cfg_path, yaml).unwrap();
+    let cfg = crate::config::load_config(&cfg_path).unwrap();
+
+    let err = crate::lint::lint(&cfg, &index).unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("lint error"), "expected lint error, got: {msg}");
+}
+
+#[test]
+fn test_lint_catches_ported_without_rust_tests() {
+    let tmp = tempdir();
+    let root = make_feature_workspace(&tmp);
+    let index = crate::feature::loader::load(&root).unwrap();
+
+    let yaml = r#"
+version: 1
+project:
+  root: .
+  feature: default
+feature_source:
+  kind: c2rust_feature
+  root: .
+tests:
+  - c_test: test_add
+    status: ported
+"#;
+    let cfg_path = tmp.join("migration.yml");
+    fs::write(&cfg_path, yaml).unwrap();
+    let cfg = crate::config::load_config(&cfg_path).unwrap();
+
+    let err = crate::lint::lint(&cfg, &index).unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("lint error"), "expected lint error, got: {msg}");
+}
+
+#[test]
+fn test_lint_catches_skipped_without_notes() {
+    let tmp = tempdir();
+    let root = make_feature_workspace(&tmp);
+    let index = crate::feature::loader::load(&root).unwrap();
+
+    let yaml = r#"
+version: 1
+project:
+  root: .
+  feature: default
+feature_source:
+  kind: c2rust_feature
+  root: .
+tests:
+  - c_test: test_skip
+    status: skipped
+"#;
+    let cfg_path = tmp.join("migration.yml");
+    fs::write(&cfg_path, yaml).unwrap();
+    let cfg = crate::config::load_config(&cfg_path).unwrap();
+
+    let err = crate::lint::lint(&cfg, &index).unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("lint error"), "expected lint error, got: {msg}");
+}
+
+#[test]
+fn test_lint_catches_symbols_without_module() {
+    let tmp = tempdir();
+    let root = make_feature_workspace(&tmp);
+    let index = crate::feature::loader::load(&root).unwrap();
+
+    let yaml = r#"
+version: 1
+project:
+  root: .
+  feature: default
+feature_source:
+  kind: c2rust_feature
+  root: .
+tests:
+  - c_test: test_add
+    symbols:
+      - add
+"#;
+    let cfg_path = tmp.join("migration.yml");
+    fs::write(&cfg_path, yaml).unwrap();
+    let cfg = crate::config::load_config(&cfg_path).unwrap();
+
+    let err = crate::lint::lint(&cfg, &index).unwrap_err();
+    let msg = format!("{err}");
+    assert!(msg.contains("lint error"), "expected lint error, got: {msg}");
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn tempdir() -> PathBuf {
