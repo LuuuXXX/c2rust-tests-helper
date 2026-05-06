@@ -56,6 +56,7 @@ pub fn run(cfg: &Config, index: &FeatureIndex, project_root: &Path) -> CheckSumm
 
     // ── step 2: bail early if lint failed ────────────────────────────────────
     if lint_result == StepResult::Failed {
+        eprintln!("check: lint failed, skipping all configured test commands");
         return CheckSummary {
             lint: lint_result,
             c_tests: StepResult::Skipped,
@@ -105,8 +106,11 @@ fn run_optional_command(cmd: Option<&str>, cwd: &Path) -> StepResult {
     }
 }
 
-/// Execute `cmd_str` via the system shell from `cwd`, streaming output to the
-/// caller's terminal.  Returns `Passed` on exit code 0, `Failed` otherwise.
+/// Execute `cmd_str` via the system shell (`sh -c`) from `cwd`, streaming
+/// output to the caller's terminal.  Returns `Passed` on exit code 0,
+/// `Failed` otherwise.
+///
+/// **Requirement**: a POSIX-compatible shell (`sh`) must be present on `PATH`.
 fn execute_shell_command(cmd_str: &str, cwd: &Path) -> StepResult {
     println!("$ {cmd_str}");
 
@@ -126,7 +130,10 @@ fn execute_shell_command(cmd_str: &str, cwd: &Path) -> StepResult {
             StepResult::Failed
         }
         Err(e) => {
-            eprintln!("failed to run command: {e}");
+            eprintln!(
+                "failed to start `sh -c {cmd_str:?}`: {e}\n\
+                 hint: ensure a POSIX-compatible shell (sh) is available on PATH"
+            );
             StepResult::Failed
         }
     }

@@ -156,11 +156,12 @@ fn cmd_check(config_path: &Path) -> Result<()> {
 
     check::print_summary(&summary);
 
-    if summary.overall_passed() {
-        Ok(())
-    } else {
-        bail!("check failed");
+    if !summary.overall_passed() {
+        // The summary already shows `overall: failed`; exit non-zero without
+        // printing a redundant error line.
+        std::process::exit(1);
     }
+    Ok(())
 }
 
 // ── validation ────────────────────────────────────────────────────────────────

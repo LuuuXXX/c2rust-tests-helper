@@ -302,6 +302,10 @@ test_commands:
 - A non-zero exit code marks the command as `failed`.
 - Commands that are absent from the config are marked `skipped` (not a failure).
 
+> **Requires a POSIX shell** – test commands are run via `sh -c`.  Make sure `sh` is
+> available on `PATH` in your execution environment.  If `sh` cannot be started,
+> the affected step is reported as `failed` with a clear hint message.
+
 **Example output (all passing)**
 
 ```
@@ -325,6 +329,7 @@ overall       : passed
 ```
 lint error: [test_add] status is 'ported' but rust_tests is empty; add at least one Rust test name
 error: 1 lint error(s) found
+check: lint failed, skipping all configured test commands
 
 === Check ===
 lint          : failed
