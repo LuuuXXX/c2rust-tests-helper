@@ -180,7 +180,7 @@ fn print_gaps(cfg: &Config, index: &FeatureIndex) {
         .filter(|m| !covered_modules.contains(m))
         .collect();
 
-    let unmapped_symbols: Vec<&str> = surface_symbol_keys
+    let unmapped_symbol_keys: Vec<&str> = surface_symbol_keys
         .iter()
         .map(String::as_str)
         .filter(|k| !covered_symbols.contains(*k))
@@ -216,14 +216,14 @@ fn print_gaps(cfg: &Config, index: &FeatureIndex) {
         }
     }
 
-    if unmapped_symbols.is_empty() {
+    if unmapped_symbol_keys.is_empty() {
         println!("  Symbols        : (none – all mapped)");
     } else {
         println!(
             "  Symbols with no mapped tests ({}):",
-            unmapped_symbols.len()
+            unmapped_symbol_keys.len()
         );
-        let mut sorted = unmapped_symbols.clone();
+        let mut sorted = unmapped_symbol_keys.clone();
         sorted.sort_unstable();
         for s in &sorted {
             println!("    {s}");

@@ -27,9 +27,9 @@ pub fn lint(cfg: &Config, index: &FeatureIndex) -> Result<()> {
             let key = (entry.c_test.clone(), entry.source_file.clone());
             if let Some(prev_idx) = seen.insert(key, i) {
                 errors.push(format!(
-                    "[{}] duplicate entry: c_test {:?} with source_file {:?} \
+                    "[{}] duplicate entry: same c_test {:?} and source_file {:?} \
                      also appears at index {}",
-                    entry.c_test, entry.c_test, entry.source_file, prev_idx
+                    i, entry.c_test, entry.source_file, prev_idx
                 ));
             }
         }
