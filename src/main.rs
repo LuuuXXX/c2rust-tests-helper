@@ -1,5 +1,8 @@
+mod collect;
 mod config;
 mod feature;
+mod lint;
+mod report;
 #[cfg(test)]
 mod tests;
 
@@ -26,6 +29,24 @@ enum Command {
         #[arg(long, short, default_value = "migration.yml")]
         config: PathBuf,
     },
+    /// Discover C tests and merge them into the migration manifest.
+    Collect {
+        /// Path to the migration config file (default: migration.yml).
+        #[arg(long, short, default_value = "migration.yml")]
+        config: PathBuf,
+    },
+    /// Validate the migration manifest against the loaded feature surface.
+    Lint {
+        /// Path to the migration config file (default: migration.yml).
+        #[arg(long, short, default_value = "migration.yml")]
+        config: PathBuf,
+    },
+    /// Print a migration-status and feature-coverage report.
+    Report {
+        /// Path to the migration config file (default: migration.yml).
+        #[arg(long, short, default_value = "migration.yml")]
+        config: PathBuf,
+    },
 }
 
 fn main() {
@@ -39,6 +60,9 @@ fn main() {
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Surface { config } => cmd_surface(&config),
+        Command::Collect { config } => cmd_collect(&config),
+        Command::Lint { config } => cmd_lint(&config),
+        Command::Report { config } => cmd_report(&config),
     }
 }
 
@@ -55,6 +79,55 @@ fn cmd_surface(config_path: &Path) -> Result<()> {
         .with_context(|| format!("loading feature surface from {}", feature_root.display()))?;
 
     index.print_summary();
+    Ok(())
+}
+
+// ── collect ───────────────────────────────────────────────────────────────────
+
+fn cmd_collect(config_path: &Path) -> Result<()> {
+    let mut cfg = config::load_config(config_path)
+        .with_context(|| format!("loading config from {}", config_path.display()))?;
+
+    validate_config(&cfg, config_path)?;
+
+    let added = collect::collect_tests(&mut cfg, config_path)
+        .with_context(|| "collecting tests")?;
+
+    config::save_config(config_path, &cfg)
+        .with_context(|| format!("writing config back to {}", config_path.display()))?;
+
+    println!("collect: added {added} new test(s); manifest updated.");
+    Ok(())
+}
+
+// ── lint ──────────────────────────────────────────────────────────────────────
+
+fn cmd_lint(config_path: &Path) -> Result<()> {
+    let cfg = config::load_config(config_path)
+        .with_context(|| format!("loading config from {}", config_path.display()))?;
+
+    validate_config(&cfg, config_path)?;
+
+    let feature_root = resolve_path(config_path, &cfg.feature_source.root);
+    let index = feature::load(&feature_root)
+        .with_context(|| format!("loading feature surface from {}", feature_root.display()))?;
+
+    lint::lint(&cfg, &index)
+}
+
+// ── report ────────────────────────────────────────────────────────────────────
+
+fn cmd_report(config_path: &Path) -> Result<()> {
+    let cfg = config::load_config(config_path)
+        .with_context(|| format!("loading config from {}", config_path.display()))?;
+
+    validate_config(&cfg, config_path)?;
+
+    let feature_root = resolve_path(config_path, &cfg.feature_source.root);
+    let index = feature::load(&feature_root)
+        .with_context(|| format!("loading feature surface from {}", feature_root.display()))?;
+
+    report::report(&cfg, &index);
     Ok(())
 }
 
