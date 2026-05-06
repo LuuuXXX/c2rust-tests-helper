@@ -662,6 +662,141 @@ tests:
     assert!(msg.contains("lint error"), "expected lint error, got: {msg}");
 }
 
+// ── check tests ───────────────────────────────────────────────────────────────
+
+#[test]
+fn test_check_lint_fails_skips_test_commands() {
+    // A manifest with a lint error: ported entry missing rust_tests.
+    let tmp = tempdir();
+    let root = make_feature_workspace(&tmp);
+    let index = crate::feature::loader::load(&root).unwrap();
+
+    let yaml = r#"
+version: 1
+project:
+  root: .
+  feature: default
+feature_source:
+  kind: c2rust_feature
+  root: .
+test_commands:
+  c: "true"
+  rust: "true"
+tests:
+  - c_test: test_broken
+    status: ported
+"#;
+    let cfg_path = tmp.join("migration.yml");
+    fs::write(&cfg_path, yaml).unwrap();
+    let cfg = crate::config::load_config(&cfg_path).unwrap();
+
+    let project_root = tmp.as_path();
+    let summary = crate::check::run(&cfg, &index, project_root);
+
+    assert_eq!(summary.lint, crate::check::StepResult::Failed);
+    // Test commands must be skipped when lint fails.
+    assert_eq!(summary.c_tests, crate::check::StepResult::Skipped);
+    assert_eq!(summary.rust_tests, crate::check::StepResult::Skipped);
+    assert_eq!(summary.feature_rust, crate::check::StepResult::Skipped);
+    assert!(!summary.overall_passed());
+}
+
+#[test]
+fn test_check_no_commands_configured() {
+    // Valid manifest, no test_commands → everything skipped except lint.
+    let tmp = tempdir();
+    let root = make_feature_workspace(&tmp);
+    let index = crate::feature::loader::load(&root).unwrap();
+
+    let yaml = r#"
+version: 1
+project:
+  root: .
+  feature: default
+feature_source:
+  kind: c2rust_feature
+  root: .
+tests: []
+"#;
+    let cfg_path = tmp.join("migration.yml");
+    fs::write(&cfg_path, yaml).unwrap();
+    let cfg = crate::config::load_config(&cfg_path).unwrap();
+
+    let project_root = tmp.as_path();
+    let summary = crate::check::run(&cfg, &index, project_root);
+
+    assert_eq!(summary.lint, crate::check::StepResult::Passed);
+    assert_eq!(summary.c_tests, crate::check::StepResult::Skipped);
+    assert_eq!(summary.rust_tests, crate::check::StepResult::Skipped);
+    assert_eq!(summary.feature_rust, crate::check::StepResult::Skipped);
+    assert!(summary.overall_passed());
+}
+
+#[test]
+fn test_check_passing_commands() {
+    // Valid manifest with commands that succeed (using shell `true`).
+    let tmp = tempdir();
+    let root = make_feature_workspace(&tmp);
+    let index = crate::feature::loader::load(&root).unwrap();
+
+    let yaml = r#"
+version: 1
+project:
+  root: .
+  feature: default
+feature_source:
+  kind: c2rust_feature
+  root: .
+test_commands:
+  c: "true"
+  rust: "true"
+tests: []
+"#;
+    let cfg_path = tmp.join("migration.yml");
+    fs::write(&cfg_path, yaml).unwrap();
+    let cfg = crate::config::load_config(&cfg_path).unwrap();
+
+    let project_root = tmp.as_path();
+    let summary = crate::check::run(&cfg, &index, project_root);
+
+    assert_eq!(summary.lint, crate::check::StepResult::Passed);
+    assert_eq!(summary.c_tests, crate::check::StepResult::Passed);
+    assert_eq!(summary.rust_tests, crate::check::StepResult::Passed);
+    assert_eq!(summary.feature_rust, crate::check::StepResult::Skipped);
+    assert!(summary.overall_passed());
+}
+
+#[test]
+fn test_check_failing_command() {
+    // Valid manifest but a test command exits non-zero.
+    let tmp = tempdir();
+    let root = make_feature_workspace(&tmp);
+    let index = crate::feature::loader::load(&root).unwrap();
+
+    let yaml = r#"
+version: 1
+project:
+  root: .
+  feature: default
+feature_source:
+  kind: c2rust_feature
+  root: .
+test_commands:
+  c: "false"
+tests: []
+"#;
+    let cfg_path = tmp.join("migration.yml");
+    fs::write(&cfg_path, yaml).unwrap();
+    let cfg = crate::config::load_config(&cfg_path).unwrap();
+
+    let project_root = tmp.as_path();
+    let summary = crate::check::run(&cfg, &index, project_root);
+
+    assert_eq!(summary.lint, crate::check::StepResult::Passed);
+    assert_eq!(summary.c_tests, crate::check::StepResult::Failed);
+    assert!(!summary.overall_passed());
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 fn tempdir() -> PathBuf {
