@@ -12,6 +12,7 @@ functions, declarations, and variables) and provides a static migration-manageme
 - **`surface`** – inspect the feature surface to understand what has been generated
 - **`lint`** – validate all manifest entries against the loaded feature surface
 - **`report`** – view migration progress and coverage gaps at a glance
+- **`check`** – validate the manifest then run all configured test suites and print a summary
 
 ## Prerequisites
 
@@ -261,6 +262,85 @@ The report includes:
     ...
 ```
 
+---
+
+### `check`
+
+Validate the manifest and run all configured test suites, then print a unified summary:
+
+```bash
+c2rust-tests-helper check --config migration.yml
+```
+
+**Execution flow**
+
+1. Load and validate `migration.yml` (paths, feature consistency).
+2. Load the feature surface from `feature_source.root`.
+3. Run `lint` – validates the manifest against the loaded feature surface.
+4. If lint fails, all test commands are **skipped** and the summary is printed immediately
+   (no test commands are executed when the manifest is invalid).
+5. If lint passes, run each configured test command from `project.root`:
+   - `test_commands.c` – C test suite
+   - `test_commands.rust` – translated Rust test suite
+   - `test_commands.feature_rust` – feature-specific Rust test suite
+6. Commands that are not configured (`null` / absent) are reported as `skipped`.
+7. A final summary is printed.
+
+**Test commands**
+
+Configure test commands in `migration.yml`:
+
+```yaml
+test_commands:
+  c: "make test"          # runs the original C tests
+  rust: "cargo test"      # runs the translated Rust tests
+  feature_rust: "cargo test --features default"  # optional: feature-specific variant
+```
+
+- Each command is executed via the system shell (`sh -c`) from `project.root`.
+- Standard output and standard error are streamed directly to the terminal.
+- A non-zero exit code marks the command as `failed`.
+- Commands that are absent from the config are marked `skipped` (not a failure).
+
+**Example output (all passing)**
+
+```
+lint: OK (12 entries checked)
+$ make test
+...
+$ cargo test
+...
+
+=== Check ===
+lint          : passed
+c tests       : passed
+rust tests    : passed
+feature_rust  : skipped
+
+overall       : passed
+```
+
+**Example output (lint failure)**
+
+```
+lint error: [test_add] status is 'ported' but rust_tests is empty; add at least one Rust test name
+error: 1 lint error(s) found
+
+=== Check ===
+lint          : failed
+c tests       : skipped
+rust tests    : skipped
+feature_rust  : skipped
+
+overall       : failed
+```
+
+**Exit code**
+
+`check` exits with a non-zero status when `overall` is `failed`.
+
+---
+
 ## Feature workspace layout
 
 `c2rust-demo` generates the following structure under `.c2rust/<feature>/`:
@@ -299,10 +379,13 @@ c2rust-tests-helper lint --config migration.yml
 
 # 5. Check overall progress.
 c2rust-tests-helper report --config migration.yml
+
+# 6. Run the full end-to-end check (lint + test suites + summary).
+c2rust-tests-helper check --config migration.yml
 ```
 
 ## Roadmap
 
 - **PR 1** – Config schema, feature surface loading, `surface` subcommand.
-- **PR 2 (this PR)** – `collect`, `lint`, and `report` subcommands; evolved `TestEntry` schema.
-- **PR 3** – Full migration workflow: `check` command (run test suites and record results).
+- **PR 2** – `collect`, `lint`, and `report` subcommands; evolved `TestEntry` schema.
+- **PR 3 (this PR)** – `check` subcommand: end-to-end validation + test execution + unified summary.

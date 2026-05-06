@@ -1,3 +1,4 @@
+mod check;
 mod collect;
 mod config;
 mod feature;
@@ -47,6 +48,12 @@ enum Command {
         #[arg(long, short, default_value = "migration.yml")]
         config: PathBuf,
     },
+    /// Validate the manifest and run all configured test suites.
+    Check {
+        /// Path to the migration config file (default: migration.yml).
+        #[arg(long, short, default_value = "migration.yml")]
+        config: PathBuf,
+    },
 }
 
 fn main() {
@@ -63,6 +70,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Collect { config } => cmd_collect(&config),
         Command::Lint { config } => cmd_lint(&config),
         Command::Report { config } => cmd_report(&config),
+        Command::Check { config } => cmd_check(&config),
     }
 }
 
@@ -129,6 +137,30 @@ fn cmd_report(config_path: &Path) -> Result<()> {
 
     report::report(&cfg, &index);
     Ok(())
+}
+
+// ── check ─────────────────────────────────────────────────────────────────────
+
+fn cmd_check(config_path: &Path) -> Result<()> {
+    let cfg = config::load_config(config_path)
+        .with_context(|| format!("loading config from {}", config_path.display()))?;
+
+    validate_config(&cfg, config_path)?;
+
+    let feature_root = resolve_path(config_path, &cfg.feature_source.root);
+    let index = feature::load(&feature_root)
+        .with_context(|| format!("loading feature surface from {}", feature_root.display()))?;
+
+    let project_root = resolve_path(config_path, &cfg.project.root);
+    let summary = check::run(&cfg, &index, &project_root);
+
+    check::print_summary(&summary);
+
+    if summary.overall_passed() {
+        Ok(())
+    } else {
+        bail!("check failed");
+    }
 }
 
 // ── validation ────────────────────────────────────────────────────────────────
