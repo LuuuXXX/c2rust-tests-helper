@@ -1,0 +1,27 @@
+version: 1
+
+project:
+  # Path to the c2rust-demo project root (relative to this file or absolute).
+  root: ../c2rust-demo
+  feature: default
+
+feature_source:
+  # Use the c2rust-demo generated feature workspace as the surface source.
+  kind: c2rust_feature
+  root: ../c2rust-demo/.c2rust/default
+
+test_commands:
+  c: "make test"
+  rust: "cargo test"
+
+discovery:
+  paths:
+    - tests/c
+  extensions:
+    - c
+  patterns:
+    - regex: 'void\s+(test_\w+)\s*\('
+      framework: custom
+
+# Populated in later PRs – maps C tests to ported Rust tests and c2rust APIs.
+tests: []

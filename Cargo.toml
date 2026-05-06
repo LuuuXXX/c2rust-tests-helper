@@ -1,0 +1,16 @@
+[package]
+name = "c2rust-tests-helper"
+version = "0.1.0"
+edition = "2021"
+description = "A test migration helper for c2rust-demo feature workspaces"
+
+[[bin]]
+name = "c2rust-tests-helper"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+anyhow = "1"
