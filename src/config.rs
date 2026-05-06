@@ -115,7 +115,7 @@ pub fn load_config(path: &Path) -> Result<Config> {
 /// Serialize `config` and write it back to `path`.
 pub fn save_config(path: &Path, config: &Config) -> Result<()> {
     let content = serde_yaml::to_string(config)
-        .with_context(|| "failed to serialise config")?;
+        .with_context(|| "failed to serialize config")?;
     std::fs::write(path, content)
         .with_context(|| format!("failed to write config file: {}", path.display()))?;
     Ok(())

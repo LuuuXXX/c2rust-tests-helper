@@ -42,11 +42,7 @@ fn count_status(cfg: &Config, status: TestStatus) -> usize {
 fn print_surface_totals(index: &FeatureIndex) {
     let total_files = index.selected_files.len();
     let total_modules = index.modules.len();
-    let total_symbols: usize = index
-        .modules
-        .iter()
-        .map(|m| m.functions.len() + m.decls.len() + m.vars.len())
-        .sum();
+    let total_symbols = count_surface_symbols(index);
 
     println!("=== Feature Surface ===");
     println!("  Selected files : {total_files}");
@@ -55,7 +51,27 @@ fn print_surface_totals(index: &FeatureIndex) {
     println!();
 }
 
+/// Count the total number of symbols (functions + decls + vars) across all modules.
+fn count_surface_symbols(index: &FeatureIndex) -> usize {
+    index
+        .modules
+        .iter()
+        .map(|m| m.functions.len() + m.decls.len() + m.vars.len())
+        .sum()
+}
+
 // ── mapping coverage ──────────────────────────────────────────────────────────
+
+/// Build the set of "module/symbol" keys referenced by tests that have both a
+/// module and at least one symbol.  Entries without a module are excluded so
+/// symbol keys are never malformed.
+fn referenced_symbol_keys(cfg: &Config) -> HashSet<String> {
+    cfg.tests
+        .iter()
+        .filter_map(|t| t.module.as_deref().map(|m| (m, &t.symbols)))
+        .flat_map(|(mod_name, syms)| syms.iter().map(move |s| format!("{mod_name}/{s}")))
+        .collect()
+}
 
 fn print_coverage(cfg: &Config, index: &FeatureIndex) {
     let referenced_files: HashSet<&str> = cfg
@@ -70,19 +86,11 @@ fn print_coverage(cfg: &Config, index: &FeatureIndex) {
         .filter_map(|t| t.module.as_deref())
         .collect();
 
-    let referenced_symbols: HashSet<&str> = cfg
-        .tests
-        .iter()
-        .flat_map(|t| t.symbols.iter().map(String::as_str))
-        .collect();
+    let referenced_symbols = referenced_symbol_keys(cfg);
 
     let total_files = index.selected_files.len();
     let total_modules = index.modules.len();
-    let total_symbols: usize = index
-        .modules
-        .iter()
-        .map(|m| m.functions.len() + m.decls.len() + m.vars.len())
-        .sum();
+    let total_symbols = count_surface_symbols(index);
 
     println!("=== Mapping Coverage ===");
     println!(
@@ -121,16 +129,7 @@ fn print_gaps(cfg: &Config, index: &FeatureIndex) {
         .filter_map(|t| t.module.as_deref())
         .collect();
 
-    let referenced_symbols: HashSet<String> = cfg
-        .tests
-        .iter()
-        .flat_map(|t| {
-            let mod_name = t.module.as_deref().unwrap_or("");
-            t.symbols
-                .iter()
-                .map(move |s| format!("{mod_name}/{s}"))
-        })
-        .collect();
+    let referenced_symbols = referenced_symbol_keys(cfg);
 
     let unmapped_files: Vec<&str> = index
         .selected_files
