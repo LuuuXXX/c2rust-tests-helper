@@ -1,0 +1,38 @@
+config:
+  discovery:
+    paths:
+    - tests/c
+    extensions:
+    - c
+    patterns:
+    - regex: (?:^|\s)(?:TEST|RUN_TEST)\(\s*(\w+)\s*\)
+      framework: unity
+    - regex: cmocka_unit_test\(\s*(\w+)\s*\)
+      framework: cmocka
+    - regex: void\s+(test_\w+)\s*\(
+      framework: custom
+  c_test_command: make test
+  rust_test_command: cargo test
+tests:
+- name: test_parse_config
+  source_file: tests/c/test_config.c
+  status: pending
+  rust_tests: []
+  notes: 'Public API: parse_config(). Rust port not started yet.'
+- name: test_add_overflow
+  source_file: tests/c/test_math.c
+  status: ported
+  rust_tests:
+  - test_add_overflow_returns_error
+  notes: Maps to error-path of public add() — checked via FFI wrapper.
+- name: test_add_positive
+  source_file: tests/c/test_math.c
+  status: ported
+  rust_tests:
+  - test_add_positive_numbers
+  notes: Covers public API fn add(). Direct 1:1 port.
+- name: test_internal_helper
+  source_file: tests/c/test_math.c
+  status: skipped
+  rust_tests: []
+  notes: Tests an internal helper not exposed through the public FFI surface.
