@@ -1,187 +1,171 @@
 # c2rust-tests-helper
 
-A minimal CLI tool for managing the migration of C tests to Rust FFI-based
-tests.
+一个用于管理 C 测试迁移到基于 Rust FFI 测试的极简 CLI 工具。
 
-When porting a C project's test suite to Rust (while keeping the C
-implementation unchanged), you need to:
+在将 C 项目的测试套件移植到 Rust（同时保持 C 实现不变）时，你需要：
 
-1. **Track** which C tests exist and which have been ported.
-2. **Run** both the original C tests and the new Rust tests to ensure they
-   agree.
-3. **Report** progress over time.
+1. **追踪** 哪些 C 测试已存在，哪些已完成移植。
+2. **运行** 原始 C 测试和新的 Rust 测试，确保两者结果一致。
+3. **报告** 随时间推移的迁移进度。
 
-`c2rust-tests-helper` handles all three steps with a single YAML file and
-three sub-commands.
+`c2rust-tests-helper` 通过一个 YAML 文件和三个子命令处理以上全部步骤。
 
 ---
 
-## Installation
+## 安装
 
 ```bash
 cargo install --path .
 ```
 
-Or build locally:
+或在本地构建：
 
 ```bash
 cargo build --release
-# binary is at ./target/release/c2rust-tests-helper
+# 二进制文件位于 ./target/release/c2rust-tests-helper
 ```
 
 ---
 
-## Quick Start
+## 快速上手
 
-### 1. Create / customise `helper.yml`
+### 1. 创建 / 定制 `helper.yml`
 
-Copy the bundled `helper.yml` to your project root and edit the `config`
-section to point at your C source tree and test commands:
+将项目中附带的 `helper.yml` 复制到你的项目根目录，并编辑 `config` 部分，指向你的 C 源码目录和测试命令：
 
 ```yaml
 config:
   discovery:
     paths:
-      - tests/c          # directories to scan for C test files
+      - tests/c          # 扫描 C 测试文件的目录
     patterns:
-      - regex: "void\\s+(test_\\w+)\\s*\\("   # matches "void test_foo("
+      - regex: "void\\s+(test_\\w+)\\s*\\("   # 匹配 "void test_foo("
         framework: custom
   c_test_command: "make test"
   rust_test_command: "cargo test"
 ```
 
-### 2. Discover C tests
+### 2. 发现 C 测试
 
 ```bash
 c2rust-tests-helper collect --config helper.yml
 ```
 
-This walks the configured `paths`, applies every regex pattern, and
-**merges** newly found test names into the `tests:` list in `helper.yml`.
-Existing entries are never overwritten, so hand-edited `status`, `rust_tests`,
-and `notes` fields are preserved.
+该命令遍历配置的 `paths`，应用每条正则表达式，并将新发现的测试名称**合并**到 `helper.yml` 的 `tests:` 列表中。已有条目不会被覆盖，手动编辑的 `status`、`rust_tests` 和 `notes` 字段会被保留。
 
-### 3. Run both test suites and check alignment
+### 3. 运行两套测试并检查一致性
 
 ```bash
 c2rust-tests-helper check --config helper.yml
 ```
 
-This:
+该命令将：
 
-* Validates the manifest (fails with a clear error on bad data).
-* Runs `c_test_command` and `rust_test_command`.
-* Prints a summary of pass/fail for each suite.
-* Writes a small results file (`helper-results.yml` by default) so that
-  `report` can display the last outcome without re-running tests.
+* 验证清单文件（数据有误时给出明确错误）。
+* 运行 `c_test_command` 和 `rust_test_command`。
+* 打印每套测试的通过/失败摘要。
+* 将结果写入结果文件（默认为 `helper-results.yml`），以便 `report` 无需重新运行测试即可显示上次结果。
 
-### 4. Report migration progress
+### 4. 报告迁移进度
 
 ```bash
 c2rust-tests-helper report --config helper.yml
 ```
 
-Prints:
+打印内容：
 
-* Totals by migration status (ported / pending / skipped / n/a).
-* A to-do list of pending entries.
-* The last C and Rust test run results (if `helper-results.yml` exists).
-
----
-
-## File layout
-
-| File | Purpose |
-|------|---------|
-| `helper.yml` | Primary manifest **and** config — single source of truth. |
-| `helper-results.yml` | Written by `check`; read by `report`. Keeps last run outcome so `report` is cheap. |
-
-> **Why two files?**  Running the test suite can be slow. Caching the
-> outcome in a separate file lets `report` display results instantly without
-> re-executing anything.  The results file is intentionally kept separate so
-> it can be ignored by version control if desired (add it to `.gitignore`).
+* 按迁移状态分类的统计（已移植 / 待移植 / 已跳过 / 不适用）。
+* 待移植条目的待办列表。
+* 上次 C 和 Rust 测试的运行结果（如果 `helper-results.yml` 存在）。
 
 ---
 
-## Manifest format
+## 文件说明
 
-Each entry in `tests:` tracks one C test:
+| 文件 | 用途 |
+|------|------|
+| `helper.yml` | 主清单**兼**配置文件——单一信息来源。 |
+| `helper-results.yml` | 由 `check` 写入，由 `report` 读取。缓存上次运行结果，使 `report` 快速响应。 |
+
+> **为什么要两个文件？** 运行测试套件可能很慢。将结果缓存到单独的文件中，可以让 `report` 即时显示结果而无需重新执行任何操作。结果文件有意独立存放，如需要可将其加入 `.gitignore` 忽略版本控制。
+
+---
+
+## 清单格式
+
+`tests:` 中的每条记录跟踪一个 C 测试：
 
 ```yaml
 tests:
-  - name: test_add_positive        # C test function name
+  - name: test_add_positive        # C 测试函数名
     source_file: tests/c/test_math.c
     status: ported                 # pending | ported | skipped | not_applicable
     rust_tests:
-      - test_add_positive_numbers  # Rust test(s) that cover this C test
-    notes: "Direct 1:1 port via public add() FFI wrapper."
+      - test_add_positive_numbers  # 覆盖该 C 测试的 Rust 测试名
+    notes: "通过公共 add() FFI 封装直接 1:1 移植。"
 ```
 
-### Migration statuses
+### 迁移状态说明
 
-| Status | Meaning |
-|--------|---------|
-| `pending` | No Rust test written yet (default for newly discovered entries). |
-| `ported` | A Rust test covering this C test has been written. |
-| `skipped` | Intentionally not ported (e.g. tests internal code not reachable via public FFI). |
-| `not_applicable` | Not a real test (helper / setup function). |
+| 状态 | 含义 |
+|------|------|
+| `pending` | 尚未编写对应的 Rust 测试（新发现条目的默认值）。 |
+| `ported` | 已编写覆盖该 C 测试的 Rust 测试。 |
+| `skipped` | 有意跳过（例如，测试的是无法通过公共 FFI 访问的内部代码）。 |
+| `not_applicable` | 不是真正的测试（辅助函数 / 初始化函数）。 |
 
 ---
 
-## Custom C test frameworks
+## 自定义 C 测试框架
 
-The `discovery.patterns` list accepts any number of regexes. The first capture
-group is extracted as the test name. You can add entries for any custom or
-self-made C test framework:
+`discovery.patterns` 列表接受任意数量的正则表达式，第一个捕获组被提取为测试名称。你可以为任何自定义或自研的 C 测试框架添加条目：
 
 ```yaml
 patterns:
-  # Unity
+  # Unity 框架
   - regex: "(?:^|\\s)TEST\\(\\s*(\\w+)\\s*\\)"
     framework: unity
-  # Home-grown macro MY_TEST(suite, name) — capture full "suite_name"
+  # 自研宏 MY_TEST(suite, name) — 捕获完整的 "suite_name"
   - regex: "MY_TEST\\(\\s*(\\w+)\\s*,\\s*(\\w+)\\s*\\)"
     framework: my_framework
 ```
 
-> **Note on multi-group patterns:** only the **first** capture group is used
-> as the test name. If your framework uses two groups (suite + name), either
-> combine them in a non-capturing group or adjust the regex so that group 1
-> contains the full identifier you want to track.
+> **多捕获组说明：** 仅使用**第一个**捕获组作为测试名称。如果你的框架使用两个组（套件名 + 测试名），可将它们合并到一个非捕获组中，或调整正则使第 1 组包含完整标识符。
 
 ---
 
-## CLI reference
+## CLI 参考
 
 ```
 c2rust-tests-helper <COMMAND> [OPTIONS]
 
-Commands:
-  collect   Scan C source files and merge new test entries into the manifest
-  check     Validate manifest, run C and Rust tests, write results, print report
-  report    Print migration summary (and optional last run results)
+子命令：
+  collect   扫描 C 源文件并将新测试条目合并到清单中
+  check     验证清单，运行 C 和 Rust 测试，写入结果，打印报告
+  report    打印迁移摘要（以及可选的上次运行结果）
 
-Options (all commands):
-  -c, --config <FILE>    Path to the manifest/config YAML [default: helper.yml]
+选项（所有子命令）：
+  -c, --config <FILE>    清单/配置 YAML 文件路径 [默认值: helper.yml]
 
-Options (check only):
-  --results <FILE>       Override path for the results output file
+选项（仅 check）：
+  --results <FILE>       覆盖结果输出文件路径
 
-Options (report only):
-  --results <FILE>       Load results from a specific file instead of the default
+选项（仅 report）：
+  --results <FILE>       从指定文件加载结果，而非使用默认文件
 ```
 
 ---
 
-## Extending the tool
+## 扩展工具
 
-The code is structured for easy extension:
+代码结构便于扩展：
 
-| Module | Responsibility |
-|--------|---------------|
-| `src/manifest.rs` | Data structures, YAML I/O, validation |
-| `src/collect.rs` | Discovery logic (add new parsers here) |
-| `src/check.rs` | Command execution and result capture |
-| `src/report.rs` | Reporting (add richer formatters here) |
-| `src/runner.rs` | Shell command runner (cross-platform) |
-| `src/cli.rs` | CLI definitions (add sub-commands here) |
+| 模块 | 职责 |
+|------|------|
+| `src/manifest.rs` | 数据结构、YAML 读写、校验 |
+| `src/collect.rs` | 发现逻辑（在此添加新的解析器） |
+| `src/check.rs` | 命令执行与结果捕获 |
+| `src/report.rs` | 报告输出（在此添加更丰富的格式化器） |
+| `src/runner.rs` | Shell 命令运行器（跨平台） |
+| `src/cli.rs` | CLI 定义（在此添加新子命令） |
+
