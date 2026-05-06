@@ -9,12 +9,13 @@ use crate::config::{Config, TestEntry};
 /// using the configured regex patterns, and merge any new entries into
 /// `cfg.tests`.  Existing entries are left untouched (idempotent).
 ///
+/// Idempotency key: `(c_test, source_file)`.  Two tests with the same name but
+/// different source files are considered distinct; a test that already appears
+/// in the manifest (matched by both fields) is never duplicated.
+///
 /// Returns the number of newly-added test entries.
 pub fn collect_tests(cfg: &mut Config, config_path: &Path) -> Result<usize> {
     let project_root = resolve_path(config_path, &cfg.project.root);
-
-    // Names that are already tracked – used to avoid duplicates.
-    let known: HashSet<String> = cfg.tests.iter().map(|t| t.c_test.clone()).collect();
 
     // Compile all regexes up-front so we bail early on syntax errors.
     let compiled: Vec<Regex> = cfg
@@ -26,6 +27,24 @@ pub fn collect_tests(cfg: &mut Config, config_path: &Path) -> Result<usize> {
                 .with_context(|| format!("invalid discovery regex: {}", p.regex))
         })
         .collect::<Result<Vec<_>>>()?;
+
+    // Warn about patterns with no capture group – they will never extract a name.
+    for (i, re) in compiled.iter().enumerate() {
+        if re.captures_len() <= 1 {
+            eprintln!(
+                "collect: warning: pattern {} {:?} has no capture group; \
+                 no test names will be extracted from it",
+                i, cfg.discovery.patterns[i].regex
+            );
+        }
+    }
+
+    // Already-tracked (c_test, source_file) pairs – used to avoid duplicates.
+    let known: HashSet<(String, Option<String>)> = cfg
+        .tests
+        .iter()
+        .map(|t| (t.c_test.clone(), t.source_file.clone()))
+        .collect();
 
     let mut new_entries: Vec<TestEntry> = Vec::new();
 
@@ -54,8 +73,12 @@ pub fn collect_tests(cfg: &mut Config, config_path: &Path) -> Result<usize> {
                 for cap in re.captures_iter(&content) {
                     if let Some(m) = cap.get(1) {
                         let test_name = m.as_str().to_owned();
-                        let already_known = known.contains(&test_name);
-                        let already_new = new_entries.iter().any(|e| e.c_test == test_name);
+                        let key = (test_name.clone(), Some(rel_path.clone()));
+                        let already_known = known.contains(&key);
+                        let already_new = new_entries.iter().any(|e| {
+                            e.c_test == test_name
+                                && e.source_file.as_deref() == Some(rel_path.as_str())
+                        });
                         if !already_known && !already_new {
                             new_entries.push(TestEntry {
                                 c_test: test_name,
@@ -68,6 +91,14 @@ pub fn collect_tests(cfg: &mut Config, config_path: &Path) -> Result<usize> {
             }
         }
     }
+
+    // Stable sort: source_file first, then c_test.  This makes repeated runs
+    // produce a deterministic YAML diff.
+    new_entries.sort_by(|a, b| {
+        a.source_file
+            .cmp(&b.source_file)
+            .then_with(|| a.c_test.cmp(&b.c_test))
+    });
 
     let added = new_entries.len();
     cfg.tests.extend(new_entries);

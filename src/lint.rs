@@ -1,22 +1,39 @@
 use anyhow::{bail, Result};
+use std::collections::HashMap;
 
 use crate::config::{Config, TestStatus};
 use crate::feature::index::FeatureIndex;
 
 /// Validate all `TestEntry` items in `cfg` against the loaded `index`.
 ///
-/// Checks performed for every entry:
+/// Checks performed:
+/// - no duplicate `(c_test, source_file)` pairs within the manifest
 /// - `selected_file` (if set) must appear in `index.selected_files`
 /// - `module` (if set) must appear in `index.modules`
 /// - each symbol in `symbols` must exist in the named module's surface
 /// - an entry with `symbols` must also specify a `module`
 /// - `ported` entries must have at least one `rust_tests` item
-/// - `skipped` entries must include `notes`
+/// - `skipped` and `not_applicable` entries must include `notes`
 ///
 /// All errors are collected before returning so the caller sees every problem
 /// at once rather than stopping at the first one.
 pub fn lint(cfg: &Config, index: &FeatureIndex) -> Result<()> {
     let mut errors: Vec<String> = Vec::new();
+
+    // ── duplicate manifest entries ─────────────────────────────────────────────
+    {
+        let mut seen: HashMap<(String, Option<String>), usize> = HashMap::new();
+        for (i, entry) in cfg.tests.iter().enumerate() {
+            let key = (entry.c_test.clone(), entry.source_file.clone());
+            if let Some(prev_idx) = seen.insert(key, i) {
+                errors.push(format!(
+                    "[{}] duplicate entry: c_test {:?} with source_file {:?} \
+                     also appears at index {}",
+                    entry.c_test, entry.c_test, entry.source_file, prev_idx
+                ));
+            }
+        }
+    }
 
     for entry in &cfg.tests {
         let id = &entry.c_test;
@@ -82,6 +99,13 @@ pub fn lint(cfg: &Config, index: &FeatureIndex) -> Result<()> {
             errors.push(format!(
                 "[{id}] status is 'skipped' but notes is missing; \
                  explain why this test is skipped"
+            ));
+        }
+
+        if entry.status == TestStatus::NotApplicable && entry.notes.is_none() {
+            errors.push(format!(
+                "[{id}] status is 'not_applicable' but notes is missing; \
+                 explain why this test is not applicable"
             ));
         }
     }

@@ -30,7 +30,7 @@ discovery:
 #   pending        – not yet evaluated (default for newly discovered tests)
 #   ported         – test has a Rust counterpart (rust_tests must be non-empty)
 #   skipped        – intentionally skipped (notes must explain why)
-#   not_applicable – test does not apply to the Rust port
+#   not_applicable – test does not apply to the Rust port (notes must explain why)
 tests:
   # --- fully mapped, ported example ---
   - c_test: test_add

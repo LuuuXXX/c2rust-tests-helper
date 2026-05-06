@@ -60,92 +60,9 @@ fn count_surface_symbols(index: &FeatureIndex) -> usize {
         .sum()
 }
 
-// ── mapping coverage ──────────────────────────────────────────────────────────
-
-/// Build the set of "module/symbol" keys referenced by tests that have both a
-/// module and at least one symbol.  Entries without a module are excluded so
-/// symbol keys are never malformed.
-fn referenced_symbol_keys(cfg: &Config) -> HashSet<String> {
-    cfg.tests
-        .iter()
-        .filter_map(|t| t.module.as_deref().map(|m| (m, &t.symbols)))
-        .flat_map(|(mod_name, syms)| syms.iter().map(move |s| format!("{mod_name}/{s}")))
-        .collect()
-}
-
-fn print_coverage(cfg: &Config, index: &FeatureIndex) {
-    let referenced_files: HashSet<&str> = cfg
-        .tests
-        .iter()
-        .filter_map(|t| t.selected_file.as_deref())
-        .collect();
-
-    let referenced_modules: HashSet<&str> = cfg
-        .tests
-        .iter()
-        .filter_map(|t| t.module.as_deref())
-        .collect();
-
-    let referenced_symbols = referenced_symbol_keys(cfg);
-
-    let total_files = index.selected_files.len();
-    let total_modules = index.modules.len();
-    let total_symbols = count_surface_symbols(index);
-
-    println!("=== Mapping Coverage ===");
-    println!(
-        "  Selected files : {}/{} ({})",
-        referenced_files.len(),
-        total_files,
-        pct(referenced_files.len(), total_files)
-    );
-    println!(
-        "  Modules        : {}/{} ({})",
-        referenced_modules.len(),
-        total_modules,
-        pct(referenced_modules.len(), total_modules)
-    );
-    println!(
-        "  Symbols        : {}/{} ({})",
-        referenced_symbols.len(),
-        total_symbols,
-        pct(referenced_symbols.len(), total_symbols)
-    );
-    println!();
-}
-
-// ── unmapped gaps ─────────────────────────────────────────────────────────────
-
-fn print_gaps(cfg: &Config, index: &FeatureIndex) {
-    let referenced_files: HashSet<&str> = cfg
-        .tests
-        .iter()
-        .filter_map(|t| t.selected_file.as_deref())
-        .collect();
-
-    let referenced_modules: HashSet<&str> = cfg
-        .tests
-        .iter()
-        .filter_map(|t| t.module.as_deref())
-        .collect();
-
-    let referenced_symbols = referenced_symbol_keys(cfg);
-
-    let unmapped_files: Vec<&str> = index
-        .selected_files
-        .iter()
-        .map(String::as_str)
-        .filter(|f| !referenced_files.contains(f))
-        .collect();
-
-    let unmapped_modules: Vec<&str> = index
-        .modules
-        .iter()
-        .map(|m| m.name.as_str())
-        .filter(|m| !referenced_modules.contains(m))
-        .collect();
-
-    let unmapped_symbols: Vec<String> = index
+/// Build the complete set of `"module/symbol"` keys that exist in the surface.
+fn all_surface_symbol_keys(index: &FeatureIndex) -> HashSet<String> {
+    index
         .modules
         .iter()
         .flat_map(|m| {
@@ -155,7 +72,118 @@ fn print_gaps(cfg: &Config, index: &FeatureIndex) {
                 .chain(m.vars.iter())
                 .map(move |sym| format!("{}/{sym}", m.name))
         })
-        .filter(|key| !referenced_symbols.contains(key))
+        .collect()
+}
+
+// ── mapping coverage ──────────────────────────────────────────────────────────
+
+fn print_coverage(cfg: &Config, index: &FeatureIndex) {
+    // Build surface membership sets for fast lookup.
+    let surface_files: HashSet<&str> =
+        index.selected_files.iter().map(String::as_str).collect();
+    let surface_modules: HashSet<&str> =
+        index.modules.iter().map(|m| m.name.as_str()).collect();
+    let surface_symbol_keys = all_surface_symbol_keys(index);
+
+    // Coverage numerators: only manifest references that actually exist in the surface.
+    let covered_files: HashSet<&str> = cfg
+        .tests
+        .iter()
+        .filter_map(|t| t.selected_file.as_deref())
+        .filter(|f| surface_files.contains(f))
+        .collect();
+
+    let covered_modules: HashSet<&str> = cfg
+        .tests
+        .iter()
+        .filter_map(|t| t.module.as_deref())
+        .filter(|m| surface_modules.contains(m))
+        .collect();
+
+    let covered_symbols: HashSet<String> = cfg
+        .tests
+        .iter()
+        .filter_map(|t| t.module.as_deref().map(|m| (m, &t.symbols)))
+        .flat_map(|(mod_name, syms)| syms.iter().map(move |s| format!("{mod_name}/{s}")))
+        .filter(|key| surface_symbol_keys.contains(key))
+        .collect();
+
+    let total_files = index.selected_files.len();
+    let total_modules = index.modules.len();
+    let total_symbols = count_surface_symbols(index);
+
+    println!("=== Mapping Coverage ===");
+    println!(
+        "  Selected files : {}/{} ({})",
+        covered_files.len(),
+        total_files,
+        pct(covered_files.len(), total_files)
+    );
+    println!(
+        "  Modules        : {}/{} ({})",
+        covered_modules.len(),
+        total_modules,
+        pct(covered_modules.len(), total_modules)
+    );
+    println!(
+        "  Symbols        : {}/{} ({})",
+        covered_symbols.len(),
+        total_symbols,
+        pct(covered_symbols.len(), total_symbols)
+    );
+    println!();
+}
+
+// ── unmapped gaps ─────────────────────────────────────────────────────────────
+
+fn print_gaps(cfg: &Config, index: &FeatureIndex) {
+    // Same surface-validated sets used for gap computation.
+    let surface_files: HashSet<&str> =
+        index.selected_files.iter().map(String::as_str).collect();
+    let surface_modules: HashSet<&str> =
+        index.modules.iter().map(|m| m.name.as_str()).collect();
+    let surface_symbol_keys = all_surface_symbol_keys(index);
+
+    let covered_files: HashSet<&str> = cfg
+        .tests
+        .iter()
+        .filter_map(|t| t.selected_file.as_deref())
+        .filter(|f| surface_files.contains(f))
+        .collect();
+
+    let covered_modules: HashSet<&str> = cfg
+        .tests
+        .iter()
+        .filter_map(|t| t.module.as_deref())
+        .filter(|m| surface_modules.contains(m))
+        .collect();
+
+    let covered_symbols: HashSet<String> = cfg
+        .tests
+        .iter()
+        .filter_map(|t| t.module.as_deref().map(|m| (m, &t.symbols)))
+        .flat_map(|(mod_name, syms)| syms.iter().map(move |s| format!("{mod_name}/{s}")))
+        .filter(|key| surface_symbol_keys.contains(key))
+        .collect();
+
+    let unmapped_files: Vec<&str> = index
+        .selected_files
+        .iter()
+        .map(String::as_str)
+        .filter(|f| !covered_files.contains(f))
+        .collect();
+
+    let unmapped_modules: Vec<&str> = index
+        .modules
+        .iter()
+        .map(|m| m.name.as_str())
+        .filter(|m| !covered_modules.contains(m))
+        .collect();
+
+    let unmapped_symbols: Vec<&str> = surface_symbol_keys
+        .iter()
+        .map(String::as_str)
+        .filter(|k| !covered_symbols.contains(*k))
         .collect();
 
     println!("=== Unmapped Gaps ===");
@@ -163,8 +191,13 @@ fn print_gaps(cfg: &Config, index: &FeatureIndex) {
     if unmapped_files.is_empty() {
         println!("  Selected files : (none – all mapped)");
     } else {
-        println!("  Selected files with no mapped tests ({}):", unmapped_files.len());
-        for f in &unmapped_files {
+        println!(
+            "  Selected files with no mapped tests ({}):",
+            unmapped_files.len()
+        );
+        let mut sorted = unmapped_files.clone();
+        sorted.sort_unstable();
+        for f in &sorted {
             println!("    {f}");
         }
     }
@@ -172,8 +205,13 @@ fn print_gaps(cfg: &Config, index: &FeatureIndex) {
     if unmapped_modules.is_empty() {
         println!("  Modules        : (none – all mapped)");
     } else {
-        println!("  Modules with no mapped tests ({}):", unmapped_modules.len());
-        for m in &unmapped_modules {
+        println!(
+            "  Modules with no mapped tests ({}):",
+            unmapped_modules.len()
+        );
+        let mut sorted = unmapped_modules.clone();
+        sorted.sort_unstable();
+        for m in &sorted {
             println!("    {m}");
         }
     }
@@ -181,8 +219,13 @@ fn print_gaps(cfg: &Config, index: &FeatureIndex) {
     if unmapped_symbols.is_empty() {
         println!("  Symbols        : (none – all mapped)");
     } else {
-        println!("  Symbols with no mapped tests ({}):", unmapped_symbols.len());
-        for s in &unmapped_symbols {
+        println!(
+            "  Symbols with no mapped tests ({}):",
+            unmapped_symbols.len()
+        );
+        let mut sorted = unmapped_symbols.clone();
+        sorted.sort_unstable();
+        for s in &sorted {
             println!("    {s}");
         }
     }

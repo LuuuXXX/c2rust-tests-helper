@@ -78,7 +78,7 @@ tests:
     rust_tests:                   # required when status = ported
       - test_add_ported
     contract: "add(a,b)==a+b"     # optional invariant description
-    notes: "reason for skipping"  # required when status = skipped
+    notes: "reason for skipping"  # required when status = skipped or not_applicable
 ```
 
 | Field | Required | Description |
@@ -91,7 +91,7 @@ tests:
 | `symbols` | | Symbols within `module` covered by this test |
 | `rust_tests` | | Rust test names – **required** when `status: ported` |
 | `contract` | | Brief description of the tested invariant |
-| `notes` | | Free-form notes – **required** when `status: skipped` |
+| `notes` | | Free-form notes – **required** when `status: skipped` or `status: not_applicable` |
 
 ## Commands
 
@@ -186,12 +186,14 @@ The command checks every entry in `tests` and reports:
 
 | Check | Description |
 |---|---|
+| no duplicates | No two entries share the same `(c_test, source_file)` pair |
 | `selected_file` exists | File is present in `meta/selected_files.json` |
 | `module` exists | Module directory `rust/src/<module>` exists |
 | `symbols` exist | Each symbol is present in the named module |
 | symbols need a module | An entry with `symbols` must also specify `module` |
 | `ported` has `rust_tests` | Ported entries must name at least one Rust test |
 | `skipped` has `notes` | Skipped entries must explain why |
+| `not_applicable` has `notes` | Not-applicable entries must explain why |
 
 All errors are collected before the command exits so you see the full picture at once.
 
