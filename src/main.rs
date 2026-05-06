@@ -79,6 +79,21 @@ fn validate_config(cfg: &config::Config, config_path: &Path) -> Result<()> {
         );
     }
 
+    // Lightweight consistency check: the last path component of feature_source.root
+    // should match project.feature so the two fields don't silently diverge.
+    let feature_dir = Path::new(&cfg.feature_source.root)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    if !feature_dir.is_empty() && feature_dir != cfg.project.feature {
+        bail!(
+            "project.feature ({:?}) does not match the last component of \
+             feature_source.root ({:?}); they should refer to the same feature",
+            cfg.project.feature,
+            feature_dir
+        );
+    }
+
     Ok(())
 }
 

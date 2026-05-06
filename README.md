@@ -38,6 +38,8 @@ feature_source:
   kind: c2rust_feature
   root: ../c2rust-demo/.c2rust/default   # generated feature workspace
 
+# project.feature must equal the last path component of feature_source.root.
+# c2rust-tests-helper validates that the two fields are consistent at startup.
 test_commands:
   c: "make test"
   rust: "cargo test"
@@ -89,17 +91,25 @@ Selected source files (3):
 Modules (2):
   [mod_math]
     functions (4):
-      fun_add
-      fun_div
-      fun_mul
-      fun_sub
+      add
+      div
+      mul
+      sub
   [mod_string_utils]
     functions (2):
-      fun_concat
-      fun_trim
+      concat
+      trim
     vars (1):
-      var_buffer_size
+      buffer_size
 ```
+
+> **Note** — the listed source files come directly from `meta/selected_files.json`
+> in the feature workspace; the example paths above are illustrative only.
+
+> **Note** — if the feature workspace was initialised but code generation has not
+> yet run (i.e. `rust/src/mod_*` directories are absent or empty), the `surface`
+> command will still succeed and report zero modules.  This is normal during early
+> workspace setup.
 
 ## Feature workspace layout
 

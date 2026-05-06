@@ -131,7 +131,9 @@ fn collect_stems(dir: &Path, prefix: &str) -> Result<Vec<String>> {
             let name = e.file_name();
             let s = name.to_string_lossy();
             if s.starts_with(prefix) && s.ends_with(".rs") {
-                Some(s[..s.len() - 3].to_owned())
+                // Strip the prefix and the `.rs` extension to get a pure symbol name.
+                // e.g. "fun_add.rs" with prefix "fun_" → "add"
+                Some(s[prefix.len()..s.len() - 3].to_owned())
             } else {
                 None
             }

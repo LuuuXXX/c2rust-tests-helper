@@ -37,9 +37,9 @@ fn test_load_feature_index() {
 
     let m = &index.modules[0];
     assert_eq!(m.name, "mod_alpha");
-    assert_eq!(m.functions, vec!["fun_add", "fun_sub"]);
-    assert_eq!(m.decls, vec!["decl_foo"]);
-    assert_eq!(m.vars, vec!["var_counter"]);
+    assert_eq!(m.functions, vec!["add", "sub"]);
+    assert_eq!(m.decls, vec!["foo"]);
+    assert_eq!(m.vars, vec!["counter"]);
 }
 
 #[test]
@@ -120,7 +120,7 @@ tests: []
     assert_eq!(cfg.version, 1);
     assert_eq!(cfg.project.feature, "default");
     assert_eq!(cfg.feature_source.kind, "c2rust_feature");
-    assert_eq!(cfg.test_commands.get("rust").map(String::as_str), Some("cargo test"));
+    assert_eq!(cfg.test_commands.rust.as_deref(), Some("cargo test"));
     assert_eq!(cfg.discovery.extensions, vec!["c"]);
     assert!(cfg.tests.is_empty());
 }
