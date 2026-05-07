@@ -145,14 +145,14 @@ fn collect_stems(dir: &Path, prefix: &str) -> Result<Vec<String>> {
 }
 
 fn infer_selected_file_for_module(mod_name: &str, selected_files: &[String]) -> Option<String> {
-    let mut matches = selected_files
+    let matches = selected_files
         .iter()
         .filter(|selected_file| module_name_matches_selected_file(mod_name, selected_file));
-    let first = matches.next()?;
-    if matches.next().is_some() {
-        None
+    let matches: Vec<_> = matches.take(2).collect();
+    if matches.len() == 1 {
+        Some(matches[0].clone())
     } else {
-        Some(first.clone())
+        None
     }
 }
 
@@ -210,5 +210,12 @@ fn sanitize_component(component: &str) -> String {
         }
     }
 
-    out.trim_matches('_').to_string()
+    let start = out.find(|ch| ch != '_');
+    let end = out.rfind(|ch| ch != '_');
+
+    match (start, end) {
+        (Some(start), Some(end)) if start == 0 && end + 1 == out.len() => out,
+        (Some(start), Some(end)) => out[start..=end].to_string(),
+        _ => String::new(),
+    }
 }

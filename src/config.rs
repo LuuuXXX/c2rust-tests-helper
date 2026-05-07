@@ -238,15 +238,15 @@ fn find_module_for_selected_file<'a>(
     index: &'a FeatureIndex,
     selected_file: &str,
 ) -> Option<&'a FeatureModule> {
-    let mut matches = index
+    let matches = index
         .modules
         .iter()
         .filter(|module| module.selected_file.as_deref() == Some(selected_file));
-    let first = matches.next()?;
-    if matches.next().is_some() {
-        None
+    let matches: Vec<_> = matches.take(2).collect();
+    if matches.len() == 1 {
+        Some(matches[0])
     } else {
-        Some(first)
+        None
     }
 }
 
