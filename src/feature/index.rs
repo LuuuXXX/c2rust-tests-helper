@@ -12,6 +12,10 @@ pub struct FeatureIndex {
 #[derive(Debug)]
 pub struct FeatureModule {
     pub name: String,
+    /// Best-effort source selected file from `meta/selected_files.json` that
+    /// produced this module.  It is inferred from the actual c2rust-demo output
+    /// so users do not need to duplicate it in `migration.yml`.
+    pub selected_file: Option<String>,
     pub functions: Vec<String>,
     pub decls: Vec<String>,
     pub vars: Vec<String>,
@@ -32,6 +36,9 @@ impl FeatureIndex {
         println!("Modules ({}):", self.modules.len());
         for m in &self.modules {
             println!("  [{}]", m.name);
+            if let Some(selected_file) = &m.selected_file {
+                println!("    selected file: {selected_file}");
+            }
             if !m.functions.is_empty() {
                 println!("    functions ({}):", m.functions.len());
                 for f in &m.functions {
