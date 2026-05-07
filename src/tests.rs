@@ -305,10 +305,47 @@ fn dt_add_smoke() {
     crate::cmd_coverage(&report_path, &rust_dir, &coverage_output_path).unwrap();
 
     let scan_output = fs::read_to_string(meta.join("test-scan-report.md")).unwrap();
+    assert!(scan_output.contains("# Test Scan Report"));
     assert!(scan_output.contains("| test | type | file | interfaces |"));
     assert!(scan_output.contains("dt_add_smoke"));
 
     let coverage_output = fs::read_to_string(meta.join("coverage-report.md")).unwrap();
+    assert!(coverage_output.contains("# Coverage Report"));
     assert!(coverage_output.contains("| interface | kind | ST | DT |"));
     assert!(coverage_output.contains("mod_src_foo::add"));
+    assert!(coverage_output.contains("## Uncovered Interfaces"));
+    assert!(coverage_output.contains("- *(none)*"));
+    assert!(coverage_output.contains("## Summary"));
+    assert!(coverage_output.contains("| total interfaces | 1 |"));
+    assert!(coverage_output.contains("| covered by DT | 1 |"));
+}
+
+#[test]
+fn test_coverage_report_includes_uncovered_list_and_summary() {
+    let symbols = vec![
+        crate::InterfaceSymbol {
+            module: "m".to_string(),
+            name: "covered".to_string(),
+            kind: crate::SymbolKind::Function,
+        },
+        crate::InterfaceSymbol {
+            module: "m".to_string(),
+            name: "uncovered".to_string(),
+            kind: crate::SymbolKind::Variable,
+        },
+    ];
+    let tests = vec![crate::TestMatch {
+        name: "dt_covered".to_string(),
+        kind: crate::TestKind::Dt,
+        file: PathBuf::from("src/mod.rs"),
+        interfaces: vec!["covered".to_string()],
+    }];
+
+    let report = crate::render_coverage_matrix(&symbols, &tests);
+    assert!(report.contains("## Uncovered Interfaces"));
+    assert!(report.contains("- `m::uncovered (variable)`"));
+    assert!(report.contains("## Summary"));
+    assert!(report.contains("| total interfaces | 2 |"));
+    assert!(report.contains("| covered by DT | 1 |"));
+    assert!(report.contains("| uncovered | 1 |"));
 }

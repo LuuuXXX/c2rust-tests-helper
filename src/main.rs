@@ -450,7 +450,7 @@ fn match_interfaces(test_source: &str, symbols: &[InterfaceSymbol]) -> Vec<Strin
 }
 
 fn render_scan_results(tests: &[TestMatch]) -> String {
-    let mut output = String::from("| test | type | file | interfaces |\n|---|---|---|---|\n");
+    let mut output = String::from("# Test Scan Report\n\n## Test Interface Matches\n\n| test | type | file | interfaces |\n|---|---|---|---|\n");
     for test in tests {
         output.push_str(&format!(
             "| {} | {} | {} | {} |",
@@ -469,7 +469,13 @@ fn render_scan_results(tests: &[TestMatch]) -> String {
 }
 
 fn render_coverage_matrix(symbols: &[InterfaceSymbol], tests: &[TestMatch]) -> String {
-    let mut output = String::from("| interface | kind | ST | DT |\n|---|---|---|---|\n");
+    let mut output = String::from(
+        "# Coverage Report\n\n## Coverage Matrix\n\n| interface | kind | ST | DT |\n|---|---|---|---|\n",
+    );
+    let mut uncovered = Vec::new();
+    let mut covered_by_st = 0_usize;
+    let mut covered_by_dt = 0_usize;
+    let mut covered_by_any = 0_usize;
     for symbol in symbols {
         let mut st = Vec::new();
         let mut dt = Vec::new();
@@ -483,10 +489,26 @@ fn render_coverage_matrix(symbols: &[InterfaceSymbol], tests: &[TestMatch]) -> S
         }
         st.sort();
         dt.sort();
+        let st_covered = !st.is_empty();
+        let dt_covered = !dt.is_empty();
+        if st_covered {
+            covered_by_st += 1;
+        }
+        if dt_covered {
+            covered_by_dt += 1;
+        }
+        if st_covered || dt_covered {
+            covered_by_any += 1;
+        } else {
+            uncovered.push(format!(
+                "{} ({})",
+                format_interface_name(symbol),
+                symbol.kind.as_str()
+            ));
+        }
         output.push_str(&format!(
-            "| {}::{} | {} | {} | {} |",
-            symbol.module,
-            symbol.name,
+            "| {} | {} | {} | {} |",
+            format_interface_name(symbol),
             symbol.kind.as_str(),
             if st.is_empty() {
                 "❌".to_string()
@@ -501,7 +523,28 @@ fn render_coverage_matrix(symbols: &[InterfaceSymbol], tests: &[TestMatch]) -> S
         ));
         output.push('\n');
     }
+    output.push_str("\n## Uncovered Interfaces\n\n");
+    if uncovered.is_empty() {
+        output.push_str("- *(none)*\n");
+    } else {
+        for item in uncovered {
+            output.push_str(&format!("- `{item}`\n"));
+        }
+    }
+    output.push_str("\n## Summary\n\n| metric | value |\n|---|---|\n");
+    output.push_str(&format!("| total interfaces | {} |\n", symbols.len()));
+    output.push_str(&format!("| covered by ST | {} |\n", covered_by_st));
+    output.push_str(&format!("| covered by DT | {} |\n", covered_by_dt));
+    output.push_str(&format!("| covered (ST or DT) | {} |\n", covered_by_any));
+    output.push_str(&format!(
+        "| uncovered | {} |\n",
+        symbols.len().saturating_sub(covered_by_any)
+    ));
     output
+}
+
+fn format_interface_name(symbol: &InterfaceSymbol) -> String {
+    format!("{}::{}", symbol.module, symbol.name)
 }
 
 fn write_output(path: &Path, content: &str) -> Result<()> {
