@@ -3,9 +3,13 @@ version: 1
 project:
   feature: default
 
-# Optional. If omitted, `verify` runs `cargo test` in `.c2rust/<feature>/rust`.
+# Optional test commands used by `verify`.
+# - `c` is executed from project.root.
+# - `rust` is executed from project.root and can be any complete Rust test command.
+#   If omitted, `verify` falls back to running `cargo test` in `.c2rust/<feature>/rust`.
 test_commands:
   c: "make test"
+  rust: "cargo test --manifest-path .c2rust/default/rust/Cargo.toml"
 
 discovery:
   paths:
