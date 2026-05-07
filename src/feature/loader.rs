@@ -243,7 +243,7 @@ fn strip_embedded_feature_c_prefix(feature_root: &Path, path: &Path) -> Option<P
         window
             .iter()
             .zip(needle.iter())
-            .all(|(component, needle)| component.as_os_str() == *needle)
+            .all(|(component, expected)| component.as_os_str() == *expected)
     })?;
 
     let suffix = components.get(start + needle.len()..)?;
