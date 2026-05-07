@@ -356,7 +356,7 @@ fn test_cmd_collect_enriches_manifest_from_feature_surface() {
         r#"["tests/c/test_math.c"]"#,
     )
     .unwrap();
-    fs::write(module_dir.join("fun_test_add.rs"), "// translated test").unwrap();
+    fs::write(module_dir.join("fun_add.rs"), "// translated function").unwrap();
 
     let cfg_path = project_root.join("migration.yml");
     fs::write(
@@ -387,7 +387,7 @@ tests: []
     assert_eq!(entry.source_file.as_deref(), Some("tests/c/test_math.c"));
     assert_eq!(entry.selected_file.as_deref(), Some("tests/c/test_math.c"));
     assert_eq!(entry.module.as_deref(), Some("mod_tests_c_test_math"));
-    assert_eq!(entry.symbols, vec!["test_add"]);
+    assert_eq!(entry.symbols, vec!["add"]);
 }
 
 #[test]
@@ -473,6 +473,103 @@ tests:
     assert_eq!(entry.selected_file.as_deref(), Some(selected_file.to_string_lossy().as_ref()));
     assert_eq!(entry.module.as_deref(), Some("mod_tests_c_test_math"));
     assert_eq!(entry.symbols, vec!["test_add"]);
+}
+
+#[test]
+fn test_apply_surface_defaults_strips_test_prefix_for_symbol_inference() {
+    let tmp = tempdir();
+    let project_root = tmp.join("project");
+    let feature_root = project_root.join(".c2rust").join("default");
+    let module_dir = feature_root
+        .join("rust")
+        .join("src")
+        .join("mod_tests_c_test_math");
+
+    fs::create_dir_all(feature_root.join("meta")).unwrap();
+    fs::create_dir_all(&module_dir).unwrap();
+    fs::write(
+        feature_root.join("meta").join("selected_files.json"),
+        r#"["tests/c/test_math.c"]"#,
+    )
+    .unwrap();
+    fs::write(module_dir.join("fun_add.rs"), "// translated function").unwrap();
+
+    let cfg_path = project_root.join("migration.yml");
+    fs::create_dir_all(&project_root).unwrap();
+    fs::write(
+        &cfg_path,
+        r#"
+version: 1
+project:
+  feature: default
+tests:
+  - c_test: test_add
+    source_file: tests/c/test_math.c
+"#,
+    )
+    .unwrap();
+
+    let index = crate::feature::loader::load(&feature_root).unwrap();
+    let mut cfg = crate::config::load_config(&cfg_path).unwrap();
+    crate::config::apply_surface_defaults(&mut cfg, &index);
+
+    let entry = &cfg.tests[0];
+    assert_eq!(entry.module.as_deref(), Some("mod_tests_c_test_math"));
+    assert_eq!(entry.symbols, vec!["add"]);
+}
+
+#[test]
+fn test_report_collects_need_user_action_items() {
+    let cfg_path = tempdir().join("migration.yml");
+    fs::write(
+        &cfg_path,
+        r#"
+version: 1
+project:
+  feature: default
+tests:
+  - c_test: test_add
+    status: pending
+  - c_test: test_io
+    status: pending
+    selected_file: tests/c/test_io.c
+  - c_test: test_parse
+    status: ported
+    selected_file: tests/c/test_parse.c
+    module: mod_tests_c_test_parse
+"#,
+    )
+    .unwrap();
+
+    let cfg = crate::config::load_config(&cfg_path).unwrap();
+    let items = crate::report::collect_user_action_items(&cfg);
+
+    assert_eq!(
+        items,
+        vec![
+            crate::report::UserActionItem {
+                test_name: "test_add".to_string(),
+                actions: vec![
+                    "pending; add rust_tests and mark as ported when ready".to_string(),
+                    "missing selected_file/module/symbols; confirm mapping".to_string(),
+                ],
+            },
+            crate::report::UserActionItem {
+                test_name: "test_io".to_string(),
+                actions: vec![
+                    "pending; add rust_tests and mark as ported when ready".to_string(),
+                    "missing module/symbols; confirm mapping".to_string(),
+                ],
+            },
+            crate::report::UserActionItem {
+                test_name: "test_parse".to_string(),
+                actions: vec![
+                    "missing symbols; confirm mapping".to_string(),
+                    "status is ported but rust_tests is empty".to_string(),
+                ],
+            },
+        ]
+    );
 }
 
 // ── collect tests ─────────────────────────────────────────────────────────────

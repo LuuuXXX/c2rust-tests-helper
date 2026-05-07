@@ -33,7 +33,7 @@ export PATH="$PWD/target/release:$PATH"
 | `inspect` | 从迁移配置中查看 feature surface（特性表面）信息 |
 | `discover` | 发现 C 测试并合并到 migration manifest（迁移清单） |
 | `validate` | 基于 feature surface（特性表面）校验 migration manifest（迁移清单） |
-| `status` | 查看迁移进度、覆盖率和未映射缺口 |
+| `status` | 查看迁移进度、覆盖率、未映射缺口，以及仍需用户补充的条目 |
 | `verify` | 校验 manifest（迁移清单）并运行已配置测试套件 |
 
 兼容命令（旧命令）仍然可用：`surface`、`collect`、`lint`、`report`、`check`。
@@ -98,7 +98,7 @@ tests:
 
 仓库中已附带可直接编辑的示例文件：[`migration.yml`](./migration.yml)。
 
-`discover`（旧别名 `collect`）会优先读取 `.c2rust/<feature>/meta/selected_files.json` 与 `rust/src/mod_*/`，自动补齐缺失的 `selected_file`、`module`、`symbols` 等字段；通常你只需要补充 `status`、`rust_tests`、`contract`、`notes` 这类无法自动判断的信息。
+`discover`（旧别名 `collect`）会优先读取 `.c2rust/<feature>/meta/selected_files.json` 与 `rust/src/mod_*/`，自动补齐缺失的 `selected_file`、`module`、`symbols` 等字段；通常你只需要补充 `status`、`rust_tests`、`contract`、`notes` 这类无法自动判断的信息。`status` 也会额外输出 `Need User Action` 区块，帮助你快速定位还需要手工确认或补写的测试条目。
 
 `test_commands.rust` 支持完整的 Rust 测试命令，例如 `cargo test`、`cargo test --features default`，也可以是指定 package / 指定测试目标的命令；如果省略该字段，`verify` 会默认在 `<feature_root>/rust` 下执行 `cargo test`。
 

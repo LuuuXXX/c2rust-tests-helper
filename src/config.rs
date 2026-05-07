@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::feature::index::{FeatureIndex, FeatureModule};
@@ -211,8 +212,8 @@ pub fn apply_surface_defaults(cfg: &mut Config, index: &FeatureIndex) {
 
         if entry.symbols.is_empty() {
             if let Some(module) = resolved_module {
-                if module.functions.iter().any(|symbol| symbol == &entry.c_test) {
-                    entry.symbols.push(entry.c_test.clone());
+                if let Some(symbol) = infer_symbol_from_test_name(module, &entry.c_test) {
+                    entry.symbols.push(symbol);
                 }
             }
         }
@@ -261,6 +262,33 @@ fn find_module_for_selected_file<'a>(
 
 fn is_blank(value: &str) -> bool {
     value.trim().is_empty()
+}
+
+fn infer_symbol_from_test_name(module: &FeatureModule, c_test: &str) -> Option<String> {
+    if module_has_symbol(module, c_test) {
+        return Some(c_test.to_string());
+    }
+
+    let stripped = c_test.strip_prefix("test_")?;
+    let matches: HashSet<&str> = module
+        .functions
+        .iter()
+        .chain(module.decls.iter())
+        .chain(module.vars.iter())
+        .filter_map(|symbol| (symbol == stripped).then_some(symbol.as_str()))
+        .collect();
+
+    if matches.len() == 1 {
+        Some(stripped.to_string())
+    } else {
+        None
+    }
+}
+
+fn module_has_symbol(module: &FeatureModule, symbol: &str) -> bool {
+    module.functions.iter().any(|candidate| candidate == symbol)
+        || module.decls.iter().any(|candidate| candidate == symbol)
+        || module.vars.iter().any(|candidate| candidate == symbol)
 }
 
 fn source_file_key(source_file: &str) -> String {
