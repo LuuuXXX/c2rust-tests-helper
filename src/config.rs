@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::feature::index::{FeatureIndex, FeatureModule};
@@ -270,15 +269,15 @@ fn infer_symbol_from_test_name(module: &FeatureModule, c_test: &str) -> Option<S
     }
 
     let stripped = c_test.strip_prefix("test_")?;
-    let matches: HashSet<&str> = module
+    let matches = module
         .functions
         .iter()
         .chain(module.decls.iter())
         .chain(module.vars.iter())
-        .filter_map(|symbol| (symbol == stripped).then_some(symbol.as_str()))
-        .collect();
+        .filter(|symbol| symbol.as_str() == stripped)
+        .count();
 
-    if matches.len() == 1 {
+    if matches == 1 {
         Some(stripped.to_string())
     } else {
         None

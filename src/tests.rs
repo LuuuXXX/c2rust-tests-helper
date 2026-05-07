@@ -356,7 +356,7 @@ fn test_cmd_collect_enriches_manifest_from_feature_surface() {
         r#"["tests/c/test_math.c"]"#,
     )
     .unwrap();
-    fs::write(module_dir.join("fun_add.rs"), "// translated function").unwrap();
+    fs::write(module_dir.join("fun_add.rs"), "// add").unwrap();
 
     let cfg_path = project_root.join("migration.yml");
     fs::write(
@@ -492,7 +492,7 @@ fn test_apply_surface_defaults_strips_test_prefix_for_symbol_inference() {
         r#"["tests/c/test_math.c"]"#,
     )
     .unwrap();
-    fs::write(module_dir.join("fun_add.rs"), "// translated function").unwrap();
+    fs::write(module_dir.join("fun_add.rs"), "// add").unwrap();
 
     let cfg_path = project_root.join("migration.yml");
     fs::create_dir_all(&project_root).unwrap();
