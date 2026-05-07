@@ -223,10 +223,19 @@ fn infer_selected_file_from_source<'a>(
     index: &'a FeatureIndex,
     source_file: &str,
 ) -> Option<&'a str> {
+    let source_key = source_file_key(source_file);
     index
         .selected_files
         .iter()
-        .find(|selected_file| selected_file.as_str() == source_file)
+        .find(|selected_file| {
+            selected_file.as_str() == source_file
+                || crate::feature::loader::selected_file_source_key(
+                    &index.feature_root,
+                    selected_file,
+                )
+                .as_deref()
+                    == Some(source_key.as_str())
+        })
         .map(String::as_str)
 }
 
@@ -252,4 +261,13 @@ fn find_module_for_selected_file<'a>(
 
 fn is_blank(value: &str) -> bool {
     value.trim().is_empty()
+}
+
+fn source_file_key(source_file: &str) -> String {
+    let normalized = source_file.replace('\\', "/");
+    let path = Path::new(&normalized);
+    match path.extension() {
+        Some(_) => path.with_extension("").to_string_lossy().into_owned(),
+        None => normalized,
+    }
 }

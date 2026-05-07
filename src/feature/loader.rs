@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
-use std::path::{Component, Path};
+use std::ffi::OsStr;
+use std::path::{Component, Path, PathBuf};
 
 use super::index::{FeatureIndex, FeatureModule};
 
@@ -106,7 +107,7 @@ fn load_modules(feature_root: &Path, selected_files: &[String]) -> Result<Vec<Fe
         let functions = collect_stems(&mod_path, "fun_")?;
         let decls = collect_stems(&mod_path, "decl_")?;
         let vars = collect_stems(&mod_path, "var_")?;
-        let selected_file = infer_selected_file_for_module(&mod_name, selected_files);
+        let selected_file = infer_selected_file_for_module(feature_root, &mod_name, selected_files);
 
         modules.push(FeatureModule {
             name: mod_name,
@@ -144,10 +145,16 @@ fn collect_stems(dir: &Path, prefix: &str) -> Result<Vec<String>> {
     Ok(stems)
 }
 
-fn infer_selected_file_for_module(mod_name: &str, selected_files: &[String]) -> Option<String> {
+fn infer_selected_file_for_module(
+    feature_root: &Path,
+    mod_name: &str,
+    selected_files: &[String],
+) -> Option<String> {
     let matches = selected_files
         .iter()
-        .filter(|selected_file| module_name_matches_selected_file(mod_name, selected_file));
+        .filter(|selected_file| {
+            module_name_matches_selected_file(feature_root, mod_name, selected_file)
+        });
     let matches: Vec<_> = matches.take(2).collect();
     if matches.len() == 1 {
         Some(matches[0].clone())
@@ -156,35 +163,19 @@ fn infer_selected_file_for_module(mod_name: &str, selected_files: &[String]) -> 
     }
 }
 
-fn module_name_matches_selected_file(mod_name: &str, selected_file: &str) -> bool {
-    module_name_for_selected_file(selected_file, false)
-        .into_iter()
-        .chain(module_name_for_selected_file(selected_file, true))
-        .any(|candidate| candidate == mod_name)
+fn module_name_matches_selected_file(feature_root: &Path, mod_name: &str, selected_file: &str) -> bool {
+    module_name_for_selected_file(feature_root, selected_file)
+        .map(|candidate| candidate == mod_name)
+        .unwrap_or(false)
 }
 
-fn module_name_for_selected_file(selected_file: &str, basename_only: bool) -> Option<String> {
-    let normalized = selected_file.replace('\\', "/");
-    let path = Path::new(&normalized);
-
-    let components: Vec<String> = if basename_only {
-        vec![path.file_stem()?.to_string_lossy().into_owned()]
-    } else {
-        let mut components: Vec<String> = path
-            .components()
-            .filter_map(|component| match component {
-                Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
-                _ => None,
-            })
-            .collect();
-        let last = components.last_mut()?;
-        *last = Path::new(last).file_stem()?.to_string_lossy().into_owned();
-        components
-    };
-
-    let suffix = components
-        .into_iter()
-        .map(|component| sanitize_component(&component))
+fn module_name_for_selected_file(feature_root: &Path, selected_file: &str) -> Option<String> {
+    let suffix = selected_file_module_key(feature_root, selected_file)?
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(part) => Some(sanitize_component(&part.to_string_lossy())),
+            _ => None,
+        })
         .filter(|component| !component.is_empty())
         .collect::<Vec<_>>()
         .join("_");
@@ -193,6 +184,95 @@ fn module_name_for_selected_file(selected_file: &str, basename_only: bool) -> Op
         None
     } else {
         Some(format!("mod_{suffix}"))
+    }
+}
+
+pub(crate) fn selected_file_source_key(feature_root: &Path, selected_file: &str) -> Option<String> {
+    let path = selected_file_module_key(feature_root, selected_file)?;
+    let extension = path.extension().and_then(OsStr::to_str);
+    let path = if extension.is_some() {
+        path.with_extension("")
+    } else {
+        path
+    };
+
+    let key = path
+        .iter()
+        .map(|component| component.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/");
+
+    if key.is_empty() {
+        None
+    } else {
+        Some(key)
+    }
+}
+
+fn selected_file_module_key(feature_root: &Path, selected_file: &str) -> Option<PathBuf> {
+    let normalized = selected_file.replace('\\', "/");
+    let path = Path::new(&normalized);
+    let relative = strip_feature_c_prefix(feature_root, path)
+        .map(Path::to_path_buf)
+        .or_else(|| strip_embedded_feature_c_prefix(feature_root, path))
+        .or_else(|| strip_literal_c_prefix(path).map(Path::to_path_buf))
+        .unwrap_or_else(|| path.to_path_buf());
+
+    let without_c2rust = strip_c2rust_suffix(&relative);
+    let module_key = match without_c2rust.extension() {
+        Some(_) => without_c2rust.with_extension(""),
+        None => without_c2rust,
+    };
+    Some(module_key)
+}
+
+fn strip_feature_c_prefix<'a>(feature_root: &Path, path: &'a Path) -> Option<&'a Path> {
+    path.strip_prefix(feature_root.join("c")).ok()
+}
+
+fn strip_embedded_feature_c_prefix(feature_root: &Path, path: &Path) -> Option<PathBuf> {
+    let feature = feature_root.file_name()?;
+    let components: Vec<_> = path.components().collect();
+    let needle = [
+        OsStr::new(".c2rust"),
+        feature,
+        OsStr::new("c"),
+    ];
+
+    let start = components.windows(needle.len()).position(|window| {
+        window
+            .iter()
+            .zip(needle.iter())
+            .all(|(component, needle)| component.as_os_str() == *needle)
+    })?;
+
+    let suffix = components.get(start + needle.len()..)?;
+    if suffix.is_empty() {
+        None
+    } else {
+        Some(suffix.iter().fold(PathBuf::new(), |mut acc, component| {
+            acc.push(component.as_os_str());
+            acc
+        }))
+    }
+}
+
+fn strip_literal_c_prefix(path: &Path) -> Option<&Path> {
+    path.strip_prefix("c").ok()
+}
+
+fn strip_c2rust_suffix(path: &Path) -> PathBuf {
+    let file_name = match path.file_name().and_then(OsStr::to_str) {
+        Some(name) => name,
+        None => return path.to_path_buf(),
+    };
+
+    if let Some(stem) = file_name.strip_suffix(".c2rust") {
+        let mut result = path.to_path_buf();
+        result.set_file_name(stem);
+        result
+    } else {
+        path.to_path_buf()
     }
 }
 
