@@ -82,7 +82,7 @@ feature_source:
 
 test_commands:
   c: "make test"
-  rust: "cargo test --features default"
+  rust: "cargo test --features default"  # rust 可写完整测试命令（features/package/target）
 
 discovery:
   paths:
