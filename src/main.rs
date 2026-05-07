@@ -294,6 +294,7 @@ fn parse_merge_report(content: &str) -> Result<Vec<InterfaceSymbol>> {
             current_sub_section = match sub_section_name.as_str() {
                 "final rust functions" => Some(SymbolKind::Function),
                 "final rust variables" => Some(SymbolKind::Variable),
+                // These merge report subsections are metadata and do not define exported symbols.
                 "module-local ffi" | "source files merged" => None,
                 _ => current_sub_section,
             };

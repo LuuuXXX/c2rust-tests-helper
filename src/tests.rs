@@ -161,10 +161,6 @@ fn test_parse_merge_report_symbols() {
 ### Source files merged
 
 - `mod_src_foo/mod.rs`
-
-### Final Rust functions
-
-*(none)*
 "#;
     let symbols = crate::parse_interface_report(report).unwrap();
     assert_eq!(symbols.len(), 4);
