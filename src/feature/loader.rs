@@ -197,7 +197,7 @@ fn module_name_for_selected_file(selected_file: &str, basename_only: bool) -> Op
 }
 
 fn sanitize_component(component: &str) -> String {
-    let mut out = String::with_capacity(component.len());
+    let mut out = String::new();
     let mut last_was_underscore = false;
 
     for ch in component.chars() {

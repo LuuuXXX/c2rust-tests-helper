@@ -44,7 +44,7 @@ impl Default for FeatureSource {
 
 impl FeatureSource {
     pub fn is_default(&self) -> bool {
-        self.kind == "c2rust_feature" && self.root.trim().is_empty()
+        self.kind == "c2rust_feature" && is_blank(&self.root)
     }
 }
 
@@ -167,7 +167,7 @@ pub fn resolve_project_root(cfg: &Config, config_path: &Path) -> PathBuf {
 /// Resolve the effective `feature_source.root`, defaulting to
 /// `<project.root>/.c2rust/<project.feature>`.
 pub fn resolve_feature_root(cfg: &Config, config_path: &Path) -> PathBuf {
-    if cfg.feature_source.root.trim().is_empty() {
+    if is_blank(&cfg.feature_source.root) {
         resolve_project_root(cfg, config_path)
             .join(".c2rust")
             .join(&cfg.project.feature)
@@ -248,4 +248,8 @@ fn find_module_for_selected_file<'a>(
     } else {
         Some(first)
     }
+}
+
+fn is_blank(value: &str) -> bool {
+    value.trim().is_empty()
 }
