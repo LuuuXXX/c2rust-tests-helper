@@ -30,11 +30,11 @@ export PATH="$PWD/target/release:$PATH"
 
 | 命令 | 说明 |
 |---|---|
-| `inspect` | Inspect the feature surface from a migration config. |
-| `discover` | Discover C tests and merge them into the migration manifest. |
-| `validate` | Validate the migration manifest against the feature surface. |
-| `status` | Show migration progress, coverage, and unmapped gaps. |
-| `verify` | Validate the manifest and run configured test suites. |
+| `inspect` | 查看 migration 配置对应的 feature surface（文件、模块、符号） |
+| `discover` | 发现 C 测试并合并写入 migration manifest |
+| `validate` | 对照 feature surface 校验 migration manifest |
+| `status` | 展示迁移进度、覆盖率与未映射缺口 |
+| `verify` | 校验 manifest 并运行已配置测试套件 |
 
 兼容命令（旧命令）仍然可用：`surface`、`collect`、`lint`、`report`、`check`。
 
