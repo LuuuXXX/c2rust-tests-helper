@@ -28,13 +28,13 @@ export PATH="$PWD/target/release:$PATH"
 
 ## 核心功能
 
-| 命令 | 说明 |
+| Command | Description |
 |---|---|
-| `inspect` | 查看 migration 配置对应的 feature surface（文件、模块、符号） |
-| `discover` | 发现 C 测试并合并写入 migration manifest |
-| `validate` | 对照 feature surface 校验 migration manifest |
-| `status` | 展示迁移进度、覆盖率与未映射缺口 |
-| `verify` | 校验 manifest 并运行已配置测试套件 |
+| `inspect` | Inspect the feature surface from a migration config. |
+| `discover` | Discover C tests and merge them into the migration manifest. |
+| `validate` | Validate the migration manifest against the feature surface. |
+| `status` | Show migration progress, coverage, and unmapped gaps. |
+| `verify` | Validate the manifest and run configured test suites. |
 
 兼容命令（旧命令）仍然可用：`surface`、`collect`、`lint`、`report`、`check`。
 
@@ -63,7 +63,7 @@ c2rust-tests-helper status
 
 默认配置文件就是 `migration.yml`，所以普通情况下不需要反复传 `--config migration.yml`。
 
-`inspect` 和 `validate` 适合高级场景或排查问题时使用。
+`verify` 默认会先执行校验流程；`validate` 主要用于你只想单独做 manifest 校验、快速排查映射问题的场景。`inspect` 也属于高级/排查入口。
 
 ## 配置示例
 
