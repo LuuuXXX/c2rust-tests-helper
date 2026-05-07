@@ -3,9 +3,9 @@ version: 1
 project:
   feature: default
 
+# Optional. If omitted, `verify` runs `cargo test` in `.c2rust/<feature>/rust`.
 test_commands:
   c: "make test"
-  rust: "cd .c2rust/default/rust && cargo test"
 
 discovery:
   paths:
@@ -16,47 +16,8 @@ discovery:
     - regex: 'void\s+(test_\w+)\s*\('
       framework: custom
 
-# Each entry maps one C test to the corresponding migration state.
-# Run `discover` to auto-populate and refresh this list.
-# `selected_file` / `module` / `symbols` are tool-maintained when they can be
-# derived from `.c2rust/<feature>/`.
-#
-# status values:
-#   pending        – not yet evaluated (default for newly discovered tests)
-#   ported         – test has a Rust counterpart (rust_tests must be non-empty)
-#   skipped        – intentionally skipped (notes must explain why)
-#   not_applicable – test does not apply to the Rust port (notes must explain why)
-tests:
-  # --- fully mapped, ported example ---
-  - c_test: test_add
-    source_file: tests/c/test_math.c
-    selected_file: tests/c/test_math.c
-    status: ported
-    module: mod_tests_c_test_math
-    symbols:
-      - test_add
-    rust_tests:
-      - test_add_ported
-    contract: "add(a, b) == a + b for all signed 32-bit inputs"
-
-  # --- mapped but not yet ported ---
-  - c_test: test_sub
-    source_file: tests/c/test_math.c
-    status: pending
-
-  # --- skipped with explanation ---
-  - c_test: test_platform_io
-    source_file: tests/c/test_io.c
-    status: skipped
-    notes: "Uses Linux-specific syscalls not available in the Rust port"
-
-  # --- not applicable ---
-  - c_test: test_legacy_compat
-    source_file: tests/c/test_compat.c
-    status: not_applicable
-    notes: "Legacy compatibility shim removed in the Rust rewrite"
-
-  # --- pending with no mapping yet (typical output from `collect`) ---
-  - c_test: test_string_concat
-    source_file: tests/c/test_strings.c
-    status: pending
+# Generated and updated by `c2rust-tests-helper discover`.
+# Users normally only edit `status`, `rust_tests`, `contract`, and `notes`.
+# `selected_file` / `module` / `symbols` are derived from `.c2rust/<feature>/`
+# when possible.
+tests: []

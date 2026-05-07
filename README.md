@@ -75,9 +75,9 @@ version: 1
 project:
   feature: default          # 必填：feature 名称
 
+# 可选；如果省略，`verify` 会默认在 `.c2rust/<feature>/rust` 下执行 `cargo test`
 test_commands:
   c: "make test"
-  rust: "cd .c2rust/default/rust && cargo test"
 
 discovery:
   paths:
@@ -88,19 +88,16 @@ discovery:
     - regex: 'void\s+(test_\w+)\s*\('
       framework: custom
 
-tests:
-  - c_test: test_add
-    source_file: tests/c/math.c
-    status: ported
-    rust_tests:
-      - test_add_ported
+# Generated and updated by `c2rust-tests-helper discover`.
+# Users normally only edit `status` / `rust_tests` / `contract` / `notes`.
+tests: []
 ```
 
 仓库中已附带可直接编辑的示例文件：[`migration.yml`](./migration.yml)。
 
-`discover`（旧别名 `collect`）会优先读取 `.c2rust/<feature>/meta/selected_files.json` 与 `rust/src/mod_*/`，自动补齐缺失的 `selected_file`、`module`、`symbols` 等字段；通常你只需要补充 `status`、`rust_tests`、`contract`、`notes` 这类无法自动判断的信息。`status` 也会额外输出 `Need User Action` 区块，帮助你快速定位还需要手工确认或补写的测试条目。
+`discover`（旧别名 `collect`）会优先读取 `.c2rust/<feature>/meta/selected_files.json` 与 `rust/src/mod_*/`，自动补齐缺失的 `selected_file`、`module`、`symbols` 等字段；通常你只需要补充 `status`、`rust_tests`、`contract`、`notes` 这类无法自动判断的信息。`status` 也会额外输出 `Need User Action` 区块，帮助你快速定位还需要手工确认或补写的测试条目。因此，示例里的 `tests: []` 才是推荐起点：先 `discover`，再补你真正需要维护的状态字段。
 
-`test_commands.rust` 支持完整的 Rust 测试命令，例如 `cargo test`、`cargo test --features default`，也可以是指定 package / 指定测试目标的命令；如果省略该字段，`verify` 会默认在 `<feature_root>/rust` 下执行 `cargo test`。
+`test_commands.rust` 支持完整的 Rust 测试命令，例如 `cargo test`、`cargo test --features default`，也可以是指定 package / 指定测试目标的命令；如果省略该字段，`verify` 会默认在 `<feature_root>/rust` 下执行 `cargo test`，所以多数场景下不需要显式配置它。
 
 ## 当前边界
 
