@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use crate::feature::index::{FeatureIndex, FeatureModule};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Config {
@@ -18,6 +20,7 @@ pub struct Config {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Project {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub root: String,
     pub feature: String,
 }
@@ -142,4 +145,107 @@ pub fn save_config(path: &Path, config: &Config) -> Result<()> {
     std::fs::write(path, content)
         .with_context(|| format!("failed to write config file: {}", path.display()))?;
     Ok(())
+}
+
+/// Resolve `p` relative to the directory that contains `config_path`.
+/// Absolute paths are returned unchanged. Empty paths resolve to the config directory.
+pub fn resolve_path(config_path: &Path, p: &str) -> PathBuf {
+    let relative_to = config_path.parent().unwrap_or_else(|| Path::new("."));
+    let joined = if p.trim().is_empty() {
+        relative_to.to_path_buf()
+    } else {
+        relative_to.join(p)
+    };
+    joined.canonicalize().unwrap_or(joined)
+}
+
+/// Resolve the effective `project.root`.
+pub fn resolve_project_root(cfg: &Config, config_path: &Path) -> PathBuf {
+    resolve_path(config_path, &cfg.project.root)
+}
+
+/// Resolve the effective `feature_source.root`, defaulting to
+/// `<project.root>/.c2rust/<project.feature>`.
+pub fn resolve_feature_root(cfg: &Config, config_path: &Path) -> PathBuf {
+    if cfg.feature_source.root.trim().is_empty() {
+        resolve_project_root(cfg, config_path)
+            .join(".c2rust")
+            .join(&cfg.project.feature)
+    } else {
+        resolve_path(config_path, &cfg.feature_source.root)
+    }
+}
+
+/// Fill missing manifest fields from the loaded c2rust-demo feature surface.
+pub fn apply_surface_defaults(cfg: &mut Config, index: &FeatureIndex) {
+    for entry in &mut cfg.tests {
+        let mut selected_file = entry.selected_file.clone();
+        if selected_file.is_none() {
+            selected_file = entry
+                .source_file
+                .as_deref()
+                .and_then(|source_file| infer_selected_file_from_source(index, source_file))
+                .map(str::to_owned);
+        }
+
+        let mut resolved_module = entry
+            .module
+            .as_deref()
+            .and_then(|name| find_module(index, name));
+
+        if resolved_module.is_none() {
+            resolved_module = selected_file
+                .as_deref()
+                .and_then(|source_file| find_module_for_selected_file(index, source_file));
+            if entry.module.is_none() {
+                entry.module = resolved_module.map(|module| module.name.clone());
+            }
+        }
+
+        if entry.selected_file.is_none() {
+            if let Some(module) = resolved_module {
+                selected_file = selected_file.or_else(|| module.selected_file.clone());
+            }
+            entry.selected_file = selected_file;
+        }
+
+        if entry.symbols.is_empty() {
+            if let Some(module) = resolved_module {
+                if module.functions.iter().any(|symbol| symbol == &entry.c_test) {
+                    entry.symbols.push(entry.c_test.clone());
+                }
+            }
+        }
+    }
+}
+
+fn infer_selected_file_from_source<'a>(
+    index: &'a FeatureIndex,
+    source_file: &str,
+) -> Option<&'a str> {
+    index
+        .selected_files
+        .iter()
+        .find(|selected_file| selected_file.as_str() == source_file)
+        .map(String::as_str)
+}
+
+fn find_module<'a>(index: &'a FeatureIndex, name: &str) -> Option<&'a FeatureModule> {
+    index.modules.iter().find(|module| module.name == name)
+}
+
+fn find_module_for_selected_file<'a>(
+    index: &'a FeatureIndex,
+    selected_file: &str,
+) -> Option<&'a FeatureModule> {
+    let mut matches = index
+        .modules
+        .iter()
+        .filter(|module| module.selected_file.as_deref() == Some(selected_file));
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        None
+    } else {
+        Some(first)
+    }
 }

@@ -1,18 +1,11 @@
 version: 1
 
 project:
-  # Path to the c2rust-demo project root (relative to this file or absolute).
-  root: ../c2rust-demo
   feature: default
-
-feature_source:
-  # Use the c2rust-demo generated feature workspace as the surface source.
-  kind: c2rust_feature
-  root: ../c2rust-demo/.c2rust/default
 
 test_commands:
   c: "make test"
-  rust: "cargo test"
+  rust: "cd .c2rust/default/rust && cargo test"
 
 discovery:
   paths:
@@ -24,7 +17,9 @@ discovery:
       framework: custom
 
 # Each entry maps one C test to the corresponding migration state.
-# Run `discover` to auto-populate this list, then edit mappings by hand.
+# Run `discover` to auto-populate and refresh this list.
+# `selected_file` / `module` / `symbols` are tool-maintained when they can be
+# derived from `.c2rust/<feature>/`.
 #
 # status values:
 #   pending        – not yet evaluated (default for newly discovered tests)
@@ -35,11 +30,11 @@ tests:
   # --- fully mapped, ported example ---
   - c_test: test_add
     source_file: tests/c/test_math.c
+    selected_file: tests/c/test_math.c
     status: ported
-    selected_file: src/math.c
-    module: mod_math
+    module: mod_tests_c_test_math
     symbols:
-      - add
+      - test_add
     rust_tests:
       - test_add_ported
     contract: "add(a, b) == a + b for all signed 32-bit inputs"
@@ -48,9 +43,6 @@ tests:
   - c_test: test_sub
     source_file: tests/c/test_math.c
     status: pending
-    module: mod_math
-    symbols:
-      - sub
 
   # --- skipped with explanation ---
   - c_test: test_platform_io

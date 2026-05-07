@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use std::path::Path;
+use std::path::{Component, Path};
 
 use super::index::{FeatureIndex, FeatureModule};
 
@@ -21,7 +21,7 @@ pub fn load(feature_root: &Path) -> Result<FeatureIndex> {
     validate_layout(feature_root)?;
 
     let selected_files = load_selected_files(feature_root)?;
-    let modules = load_modules(feature_root)?;
+    let modules = load_modules(feature_root, &selected_files)?;
 
     Ok(FeatureIndex {
         feature_root: feature_root.to_path_buf(),
@@ -80,7 +80,7 @@ fn load_selected_files(feature_root: &Path) -> Result<Vec<String>> {
 
 // ── modules ───────────────────────────────────────────────────────────────────
 
-fn load_modules(feature_root: &Path) -> Result<Vec<FeatureModule>> {
+fn load_modules(feature_root: &Path, selected_files: &[String]) -> Result<Vec<FeatureModule>> {
     let rust_src = feature_root.join("rust").join("src");
     let mut modules = Vec::new();
 
@@ -106,9 +106,11 @@ fn load_modules(feature_root: &Path) -> Result<Vec<FeatureModule>> {
         let functions = collect_stems(&mod_path, "fun_")?;
         let decls = collect_stems(&mod_path, "decl_")?;
         let vars = collect_stems(&mod_path, "var_")?;
+        let selected_file = infer_selected_file_for_module(&mod_name, selected_files);
 
         modules.push(FeatureModule {
             name: mod_name,
+            selected_file,
             functions,
             decls,
             vars,
@@ -140,4 +142,73 @@ fn collect_stems(dir: &Path, prefix: &str) -> Result<Vec<String>> {
 
     stems.sort();
     Ok(stems)
+}
+
+fn infer_selected_file_for_module(mod_name: &str, selected_files: &[String]) -> Option<String> {
+    let mut matches = selected_files
+        .iter()
+        .filter(|selected_file| module_name_matches_selected_file(mod_name, selected_file));
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        None
+    } else {
+        Some(first.clone())
+    }
+}
+
+fn module_name_matches_selected_file(mod_name: &str, selected_file: &str) -> bool {
+    module_name_for_selected_file(selected_file, false)
+        .into_iter()
+        .chain(module_name_for_selected_file(selected_file, true))
+        .any(|candidate| candidate == mod_name)
+}
+
+fn module_name_for_selected_file(selected_file: &str, basename_only: bool) -> Option<String> {
+    let normalized = selected_file.replace('\\', "/");
+    let path = Path::new(&normalized);
+
+    let components: Vec<String> = if basename_only {
+        vec![path.file_stem()?.to_string_lossy().into_owned()]
+    } else {
+        let mut components: Vec<String> = path
+            .components()
+            .filter_map(|component| match component {
+                Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect();
+        let last = components.last_mut()?;
+        *last = Path::new(last).file_stem()?.to_string_lossy().into_owned();
+        components
+    };
+
+    let suffix = components
+        .into_iter()
+        .map(|component| sanitize_component(&component))
+        .filter(|component| !component.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+
+    if suffix.is_empty() {
+        None
+    } else {
+        Some(format!("mod_{suffix}"))
+    }
+}
+
+fn sanitize_component(component: &str) -> String {
+    let mut out = String::with_capacity(component.len());
+    let mut last_was_underscore = false;
+
+    for ch in component.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            last_was_underscore = false;
+        } else if !last_was_underscore {
+            out.push('_');
+            last_was_underscore = true;
+        }
+    }
+
+    out.trim_matches('_').to_string()
 }

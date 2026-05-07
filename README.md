@@ -67,26 +67,21 @@ c2rust-tests-helper status
 
 ## 配置示例
 
-在 `c2rust-demo` 克隆目录旁（或任意位置）新建 `migration.yml`，文件中的路径均相对于该文件本身解析。
+推荐直接在被迁移项目根目录执行 helper，并把 `migration.yml` 放在该目录下。这样 `project.root` 和 `feature_source.root` 都可以省略；工具会默认使用当前 `migration.yml` 所在目录作为项目根目录，并将 feature workspace 解析为 `.c2rust/<feature>/`。
 
 ```yaml
 version: 1
 
 project:
-  root: ../c2rust-demo      # c2rust-demo 项目根目录
-  feature: default          # feature 名称
-
-feature_source:
-  kind: c2rust_feature
-  root: ../c2rust-demo/.c2rust/default   # 生成的 feature workspace
+  feature: default          # 必填：feature 名称
 
 test_commands:
   c: "make test"
-  rust: "cargo test --features default"  # rust 可写完整测试命令（features/package/target）
+  rust: "cd .c2rust/default/rust && cargo test"
 
 discovery:
   paths:
-    - tests/c           # 扫描目录，相对于 project.root
+    - tests/c           # 扫描目录，相对于 project.root（默认就是 migration.yml 所在目录）
   extensions:
     - c
   patterns:
@@ -97,14 +92,13 @@ tests:
   - c_test: test_add
     source_file: tests/c/math.c
     status: ported
-    module: mod_math
-    symbols:
-      - add
     rust_tests:
       - test_add_ported
 ```
 
 仓库中已附带可直接编辑的示例文件：[`migration.yml`](./migration.yml)。
+
+`discover` 会优先读取 `.c2rust/<feature>/meta/selected_files.json` 与 `rust/src/mod_*/`，自动补齐缺失的 `selected_file`、`module`、`symbols` 等字段；通常你只需要补充 `status`、`rust_tests`、`contract`、`notes` 这类无法自动判断的信息。
 
 `test_commands.rust` 支持完整的 Rust 测试命令，例如 `cargo test`、`cargo test --features default`，也可以是指定 package / 指定测试目标的命令。
 
@@ -117,7 +111,6 @@ tests:
 - 测试执行编排（manifest 校验 → 执行 `test_commands.c` / `test_commands.rust` → 统一摘要）
 
 **本工具暂未实现：**
-- 自动测试→模块/符号推断
 - Rust AST 分析
 - 历史结果缓存
 - JSON/JUnit 报告输出
