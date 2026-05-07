@@ -1,1239 +1,184 @@
+use clap::Parser;
 use std::fs;
-use std::path::PathBuf;
-use clap::{CommandFactory, Parser};
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Create a minimal feature workspace under `base` and return its path.
-fn make_feature_workspace(base: &PathBuf) -> PathBuf {
-    let root = base.join("feature_root");
-    let meta = root.join("meta");
-    let rust_root = root.join("rust");
-    let rust_src = rust_root.join("src");
-    let mod_a = rust_src.join("mod_src_alpha");
-
-    fs::create_dir_all(&meta).unwrap();
-    fs::create_dir_all(&mod_a).unwrap();
-
-    fs::write(
-        meta.join("selected_files.json"),
-        r#"["src/alpha.c", "src/beta.c"]"#,
-    )
-    .unwrap();
-
-    fs::write(
-        rust_root.join("Cargo.toml"),
-        r#"[package]
-name = "feature-workspace"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-path = "src/lib.rs"
-"#,
-    )
-    .unwrap();
-    fs::write(rust_src.join("lib.rs"), "pub fn smoke() -> bool { true }\n").unwrap();
-    fs::write(mod_a.join("fun_add.rs"), "// add").unwrap();
-    fs::write(mod_a.join("fun_sub.rs"), "// sub").unwrap();
-    fs::write(mod_a.join("decl_foo.rs"), "// foo decl").unwrap();
-    fs::write(mod_a.join("var_counter.rs"), "// counter").unwrap();
-
-    root
+struct TempDirGuard {
+    path: PathBuf,
 }
 
-#[test]
-fn test_load_feature_index() {
-    let tmp = tempdir();
-    let root = make_feature_workspace(&tmp);
-
-    let index = crate::feature::loader::load(&root).expect("load should succeed");
-
-    assert_eq!(index.selected_files, vec!["src/alpha.c", "src/beta.c"]);
-    assert_eq!(index.modules.len(), 1);
-
-    let m = &index.modules[0];
-    assert_eq!(m.name, "mod_src_alpha");
-    assert_eq!(m.selected_file.as_deref(), Some("src/alpha.c"));
-    assert_eq!(m.functions, vec!["add", "sub"]);
-    assert_eq!(m.decls, vec!["foo"]);
-    assert_eq!(m.vars, vec!["counter"]);
+impl TempDirGuard {
+    fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
-#[test]
-fn test_load_feature_index_with_absolute_selected_file_paths() {
-    let tmp = tempdir();
-    let root = make_feature_workspace(&tmp);
-    let selected_file = root.join("c").join("src").join("alpha.c2rust");
-    fs::write(
-        root.join("meta").join("selected_files.json"),
-        format!(r#"["{}"]"#, selected_file.display()),
-    )
-    .unwrap();
-
-    let index = crate::feature::loader::load(&root).expect("load should succeed");
-
-    assert_eq!(index.modules.len(), 1);
-    let m = &index.modules[0];
-    assert_eq!(m.name, "mod_src_alpha");
-    assert_eq!(
-        m.selected_file.as_deref(),
-        Some(selected_file.to_string_lossy().as_ref())
-    );
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
 }
 
-#[test]
-fn test_load_missing_root() {
-    let err = crate::feature::loader::load(std::path::Path::new("/nonexistent/path"))
-        .unwrap_err();
-    let msg = format!("{err}");
-    assert!(msg.contains("does not exist"), "unexpected error: {msg}");
-}
-
-#[test]
-fn test_load_missing_meta() {
-    let tmp = tempdir();
-    let root = tmp.join("feature");
-    fs::create_dir_all(root.join("rust").join("src")).unwrap();
-    // No meta/ directory.
-
-    let err = crate::feature::loader::load(&root).unwrap_err();
-    let msg = format!("{err}");
-    assert!(msg.contains("meta/"), "unexpected error: {msg}");
-}
-
-#[test]
-fn test_load_missing_selected_files() {
-    let tmp = tempdir();
-    let root = tmp.join("feature");
-    fs::create_dir_all(root.join("meta")).unwrap();
-    fs::create_dir_all(root.join("rust").join("src")).unwrap();
-    // No selected_files.json.
-
-    let err = crate::feature::loader::load(&root).unwrap_err();
-    let msg = format!("{err}");
-    assert!(msg.contains("selected_files.json"), "unexpected error: {msg}");
-}
-
-#[test]
-fn test_load_missing_rust_src() {
-    let tmp = tempdir();
-    let root = tmp.join("feature");
-    let meta = root.join("meta");
-    fs::create_dir_all(&meta).unwrap();
-    fs::write(meta.join("selected_files.json"), "[]").unwrap();
-    // No rust/src/ directory.
-
-    let err = crate::feature::loader::load(&root).unwrap_err();
-    let msg = format!("{err}");
-    assert!(msg.contains("rust/src/"), "unexpected error: {msg}");
-}
-
-#[test]
-fn test_config_parse() {
-    let yaml = r#"
-version: 1
-project:
-  root: ../c2rust-demo
-  feature: default
-feature_source:
-  kind: c2rust_feature
-  root: ../c2rust-demo/.c2rust/default
-test_commands:
-  c: "make test"
-  rust: "cargo test"
-discovery:
-  paths:
-    - tests/c
-  extensions:
-    - c
-  patterns:
-    - regex: 'void\s+(test_\w+)\s*\('
-      framework: custom
-tests: []
-"#;
-    let tmp = tempdir();
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, yaml).unwrap();
-
-    let cfg = crate::config::load_config(&cfg_path).expect("parse should succeed");
-    assert_eq!(cfg.version, 1);
-    assert_eq!(cfg.project.feature, "default");
-    assert_eq!(cfg.feature_source.kind, "c2rust_feature");
-    assert_eq!(cfg.test_commands.rust.as_deref(), Some("cargo test"));
-    assert_eq!(cfg.discovery.extensions, vec!["c"]);
-    assert!(cfg.tests.is_empty());
-}
-
-#[test]
-fn test_config_parse_test_entry() {
-    let yaml = r#"
-version: 1
-project:
-  root: .
-  feature: default
-feature_source:
-  kind: c2rust_feature
-  root: ./.c2rust/default
-tests:
-  - c_test: test_add
-    source_file: tests/c/test_math.c
-    status: ported
-    module: mod_math
-    symbols:
-      - add
-    rust_tests:
-      - test_add_ported
-  - c_test: test_sub
-    status: pending
-  - c_test: test_deprecated
-    status: skipped
-    notes: "removed from upstream"
-  - c_test: test_platform_specific
-    status: not_applicable
-    notes: "Linux only"
-"#;
-    let tmp = tempdir();
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, yaml).unwrap();
-
-    let cfg = crate::config::load_config(&cfg_path).expect("parse should succeed");
-    assert_eq!(cfg.tests.len(), 4);
-
-    let t0 = &cfg.tests[0];
-    assert_eq!(t0.c_test, "test_add");
-    assert_eq!(t0.status, crate::config::TestStatus::Ported);
-    assert_eq!(t0.module.as_deref(), Some("mod_math"));
-    assert_eq!(t0.symbols, vec!["add"]);
-    assert_eq!(t0.rust_tests, vec!["test_add_ported"]);
-
-    let t1 = &cfg.tests[1];
-    assert_eq!(t1.c_test, "test_sub");
-    assert_eq!(t1.status, crate::config::TestStatus::Pending);
-
-    let t2 = &cfg.tests[2];
-    assert_eq!(t2.status, crate::config::TestStatus::Skipped);
-    assert_eq!(t2.notes.as_deref(), Some("removed from upstream"));
-
-    let t3 = &cfg.tests[3];
-    assert_eq!(t3.status, crate::config::TestStatus::NotApplicable);
-}
-
-#[test]
-fn test_config_parse_with_derived_roots() {
-    let yaml = r#"
-version: 1
-project:
-  feature: default
-discovery:
-  paths:
-    - tests/c
-tests: []
-"#;
-    let tmp = tempdir();
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, yaml).unwrap();
-
-    let cfg = crate::config::load_config(&cfg_path).expect("parse should succeed");
-    assert_eq!(cfg.project.root, "");
-    assert!(cfg.feature_source.is_default());
+fn create_temp_dir(name: &str) -> TempDirGuard {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let path = std::env::temp_dir().join(format!("c2rust-tests-helper_{name}_{timestamp}"));
+    fs::create_dir_all(&path).expect("create temp dir");
+    TempDirGuard { path }
 }
 
 #[test]
 fn test_cli_accepts_new_commands() {
-    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "discover"]).unwrap();
+    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "interface"]).unwrap();
     match cli.command {
-        crate::Command::Discover { config } => assert_eq!(config, PathBuf::from("migration.yml")),
-        _ => panic!("expected discover command"),
+        crate::Command::Interface { report } => {
+            assert_eq!(report, PathBuf::from("meta/init-interface-report.md"))
+        }
+        _ => panic!("expected interface command"),
     }
 
-    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "validate"]).unwrap();
+    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "scan"]).unwrap();
     match cli.command {
-        crate::Command::Validate { config } => assert_eq!(config, PathBuf::from("migration.yml")),
-        _ => panic!("expected validate command"),
+        crate::Command::Scan { report, rust_root } => {
+            assert_eq!(report, PathBuf::from("meta/init-interface-report.md"));
+            assert_eq!(rust_root, PathBuf::from("."));
+        }
+        _ => panic!("expected scan command"),
     }
 
-    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "status"]).unwrap();
+    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "coverage"]).unwrap();
     match cli.command {
-        crate::Command::Status { config } => assert_eq!(config, PathBuf::from("migration.yml")),
-        _ => panic!("expected status command"),
-    }
-
-    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "verify"]).unwrap();
-    match cli.command {
-        crate::Command::Verify { config } => assert_eq!(config, PathBuf::from("migration.yml")),
-        _ => panic!("expected verify command"),
-    }
-
-    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "inspect"]).unwrap();
-    match cli.command {
-        crate::Command::Inspect { config } => assert_eq!(config, PathBuf::from("migration.yml")),
-        _ => panic!("expected inspect command"),
+        crate::Command::Coverage { report, rust_root } => {
+            assert_eq!(report, PathBuf::from("meta/init-interface-report.md"));
+            assert_eq!(rust_root, PathBuf::from("."));
+        }
+        _ => panic!("expected coverage command"),
     }
 }
 
 #[test]
-fn test_cli_legacy_commands_still_work_as_aliases() {
-    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "collect"]).unwrap();
-    assert!(matches!(cli.command, crate::Command::Discover { .. }));
-
-    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "lint"]).unwrap();
-    assert!(matches!(cli.command, crate::Command::Validate { .. }));
-
-    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "report"]).unwrap();
-    assert!(matches!(cli.command, crate::Command::Status { .. }));
-
-    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "check"]).unwrap();
-    assert!(matches!(cli.command, crate::Command::Verify { .. }));
-
-    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "surface"]).unwrap();
-    assert!(matches!(cli.command, crate::Command::Inspect { .. }));
+fn test_cli_rejects_legacy_commands() {
+    assert!(crate::Cli::try_parse_from(["c2rust-tests-helper", "collect"]).is_err());
+    assert!(crate::Cli::try_parse_from(["c2rust-tests-helper", "lint"]).is_err());
+    assert!(crate::Cli::try_parse_from(["c2rust-tests-helper", "report"]).is_err());
 }
 
 #[test]
-fn test_cli_help_shows_new_commands_and_legacy_aliases() {
-    let mut cmd = crate::Cli::command();
-    let mut help = Vec::new();
-    cmd.write_long_help(&mut help).unwrap();
-    let help = String::from_utf8(help).unwrap();
+fn test_parse_interface_report_function_and_variable() {
+    let report = r#"
+# Init Interface Report — feature `demo`
 
-    assert!(help.contains("discover"));
-    assert!(help.contains("validate"));
-    assert!(help.contains("status"));
-    assert!(help.contains("verify"));
-    assert!(help.contains("inspect"));
+---
 
-    assert!(help.contains("aliases: collect"));
-    assert!(help.contains("aliases: lint"));
-    assert!(help.contains("aliases: report"));
-    assert!(help.contains("aliases: check"));
-    assert!(help.contains("aliases: surface"));
+## mod_src_foo
+
+### `add` (function)
+
+- **Rust symbol:** `add`
+
+### `counter` (variable)
+- **FFI:** `static mut counter: c_int`
+"#;
+    let symbols = crate::parse_interface_report(report).unwrap();
+    assert_eq!(symbols.len(), 2);
+    assert_eq!(symbols[0].module, "mod_src_foo");
+    assert_eq!(symbols[0].name, "add");
+    assert_eq!(symbols[0].kind, crate::SymbolKind::Function);
+    assert_eq!(symbols[1].name, "counter");
+    assert_eq!(symbols[1].kind, crate::SymbolKind::Variable);
 }
 
 #[test]
-fn test_validate_config_accepts_derived_project_and_feature_roots() {
-    let tmp = tempdir();
-    let project_root = tmp.join("project");
-    let feature_root = project_root.join(".c2rust").join("default");
-    fs::create_dir_all(feature_root.join("meta")).unwrap();
-    fs::create_dir_all(feature_root.join("rust").join("src")).unwrap();
-    fs::write(
-        feature_root.join("meta").join("selected_files.json"),
-        r#"["tests/c/test_math.c"]"#,
-    )
-    .unwrap();
+fn test_parse_interface_report_skips_non_module_sections() {
+    let report = r#"
+## Summary
 
-    let cfg_path = project_root.join("migration.yml");
-    fs::create_dir_all(&project_root).unwrap();
+### `ignored` (function)
+
+## `lib.rs` — Shared FFI
+
+### `also_ignored` (variable)
+
+## mod_src_foo
+
+### `kept_symbol` (function)
+
+## my_lib.rs_parser
+
+### `also_kept` (function)
+"#;
+    let symbols = crate::parse_interface_report(report).unwrap();
+    assert_eq!(symbols.len(), 2);
+    assert_eq!(symbols[0].module, "mod_src_foo");
+    assert_eq!(symbols[0].name, "kept_symbol");
+    assert_eq!(symbols[1].module, "my_lib.rs_parser");
+    assert_eq!(symbols[1].name, "also_kept");
+}
+
+#[test]
+fn test_scan_rust_tests_and_match_interfaces() {
+    let dir = create_temp_dir("scan");
+    let src = dir.path().join("src");
+    let tests = dir.path().join("tests");
+    fs::create_dir_all(&src).unwrap();
+    fs::create_dir_all(&tests).unwrap();
+
     fs::write(
-        &cfg_path,
+        src.join("unit.rs"),
         r#"
-version: 1
-project:
-  feature: default
-tests: []
+#[test]
+fn dt_add_works() {
+    assert_eq!(unsafe { add(1, 2) }, 3);
+}
+
+#[test]
+fn system_keyword_in_name_but_unit_test() {
+    assert_eq!(unsafe { add(1, 2) }, 3);
+}
 "#,
     )
     .unwrap();
 
-    let cfg = crate::config::load_config(&cfg_path).unwrap();
-    crate::validate_config(&cfg, &cfg_path).unwrap();
-}
-
-#[test]
-fn test_cmd_collect_enriches_manifest_from_feature_surface() {
-    let tmp = tempdir();
-    let project_root = tmp.join("project");
-    let tests_dir = project_root.join("tests").join("c");
-    let feature_root = project_root.join(".c2rust").join("default");
-    let module_dir = feature_root.join("rust").join("src").join("mod_tests_c_test_math");
-
-    fs::create_dir_all(&tests_dir).unwrap();
-    fs::create_dir_all(feature_root.join("meta")).unwrap();
-    fs::create_dir_all(&module_dir).unwrap();
-
-    fs::write(tests_dir.join("test_math.c"), "void test_add() {}\n").unwrap();
     fs::write(
-        feature_root.join("meta").join("selected_files.json"),
-        r#"["tests/c/test_math.c"]"#,
-    )
-    .unwrap();
-    fs::write(module_dir.join("fun_add.rs"), "// add").unwrap();
-
-    let cfg_path = project_root.join("migration.yml");
-    fs::write(
-        &cfg_path,
+        tests.join("system.rs"),
         r#"
-version: 1
-project:
-  feature: default
-discovery:
-  paths:
-    - tests/c
-  extensions:
-    - c
-  patterns:
-    - regex: 'void\s+(test_\w+)\s*\(\)'
-      framework: custom
-tests: []
+#[test]
+fn st_counter_smoke() {
+    unsafe { counter = 1; }
+}
 "#,
     )
     .unwrap();
 
-    crate::cmd_collect(&cfg_path).unwrap();
-
-    let cfg = crate::config::load_config(&cfg_path).unwrap();
-    assert_eq!(cfg.tests.len(), 1);
-    let entry = &cfg.tests[0];
-    assert_eq!(entry.c_test, "test_add");
-    assert_eq!(entry.source_file.as_deref(), Some("tests/c/test_math.c"));
-    assert_eq!(entry.selected_file.as_deref(), Some("tests/c/test_math.c"));
-    assert_eq!(entry.module.as_deref(), Some("mod_tests_c_test_math"));
-    assert_eq!(entry.symbols, vec!["add"]);
-}
-
-#[test]
-fn test_cmd_lint_accepts_inferred_manifest_fields() {
-    let tmp = tempdir();
-    let project_root = tmp.join("project");
-    let feature_root = project_root.join(".c2rust").join("default");
-    let module_dir = feature_root.join("rust").join("src").join("mod_tests_c_test_math");
-
-    fs::create_dir_all(feature_root.join("meta")).unwrap();
-    fs::create_dir_all(&module_dir).unwrap();
-    fs::write(
-        feature_root.join("meta").join("selected_files.json"),
-        r#"["tests/c/test_math.c"]"#,
-    )
-    .unwrap();
-    fs::write(module_dir.join("fun_test_add.rs"), "// translated test").unwrap();
-
-    let cfg_path = project_root.join("migration.yml");
-    fs::create_dir_all(&project_root).unwrap();
-    fs::write(
-        &cfg_path,
-        r#"
-version: 1
-project:
-  feature: default
-tests:
-  - c_test: test_add
-    source_file: tests/c/test_math.c
-    status: ported
-    rust_tests:
-      - test_add_ported
-"#,
-    )
-    .unwrap();
-
-    crate::cmd_lint(&cfg_path).unwrap();
-}
-
-#[test]
-fn test_apply_surface_defaults_accepts_absolute_selected_file_path() {
-    let tmp = tempdir();
-    let project_root = tmp.join("project");
-    let feature_root = project_root.join(".c2rust").join("default");
-    let selected_file = feature_root.join("c").join("tests").join("c").join("test_math.c2rust");
-    let module_dir = feature_root
-        .join("rust")
-        .join("src")
-        .join("mod_tests_c_test_math");
-
-    fs::create_dir_all(feature_root.join("meta")).unwrap();
-    fs::create_dir_all(&module_dir).unwrap();
-    fs::write(
-        feature_root.join("meta").join("selected_files.json"),
-        format!(r#"["{}"]"#, selected_file.display()),
-    )
-    .unwrap();
-    fs::write(module_dir.join("fun_test_add.rs"), "// translated test").unwrap();
-
-    let cfg_path = project_root.join("migration.yml");
-    fs::create_dir_all(&project_root).unwrap();
-    fs::write(
-        &cfg_path,
-        r#"
-version: 1
-project:
-  feature: default
-tests:
-  - c_test: test_add
-    source_file: tests/c/test_math.c
-    status: ported
-    rust_tests:
-      - test_add_ported
-"#,
-    )
-    .unwrap();
-
-    let index = crate::feature::loader::load(&feature_root).unwrap();
-    let mut cfg = crate::config::load_config(&cfg_path).unwrap();
-    crate::config::apply_surface_defaults(&mut cfg, &index);
-
-    let entry = &cfg.tests[0];
-    assert_eq!(entry.selected_file.as_deref(), Some(selected_file.to_string_lossy().as_ref()));
-    assert_eq!(entry.module.as_deref(), Some("mod_tests_c_test_math"));
-    assert_eq!(entry.symbols, vec!["test_add"]);
-}
-
-#[test]
-fn test_apply_surface_defaults_strips_test_prefix_for_symbol_inference() {
-    let tmp = tempdir();
-    let project_root = tmp.join("project");
-    let feature_root = project_root.join(".c2rust").join("default");
-    let module_dir = feature_root
-        .join("rust")
-        .join("src")
-        .join("mod_tests_c_test_math");
-
-    fs::create_dir_all(feature_root.join("meta")).unwrap();
-    fs::create_dir_all(&module_dir).unwrap();
-    fs::write(
-        feature_root.join("meta").join("selected_files.json"),
-        r#"["tests/c/test_math.c"]"#,
-    )
-    .unwrap();
-    fs::write(module_dir.join("fun_add.rs"), "// add").unwrap();
-
-    let cfg_path = project_root.join("migration.yml");
-    fs::create_dir_all(&project_root).unwrap();
-    fs::write(
-        &cfg_path,
-        r#"
-version: 1
-project:
-  feature: default
-tests:
-  - c_test: test_add
-    source_file: tests/c/test_math.c
-"#,
-    )
-    .unwrap();
-
-    let index = crate::feature::loader::load(&feature_root).unwrap();
-    let mut cfg = crate::config::load_config(&cfg_path).unwrap();
-    crate::config::apply_surface_defaults(&mut cfg, &index);
-
-    let entry = &cfg.tests[0];
-    assert_eq!(entry.module.as_deref(), Some("mod_tests_c_test_math"));
-    assert_eq!(entry.symbols, vec!["add"]);
-}
-
-#[test]
-fn test_report_collects_need_user_action_items() {
-    let cfg_path = tempdir().join("migration.yml");
-    fs::write(
-        &cfg_path,
-        r#"
-version: 1
-project:
-  feature: default
-tests:
-  - c_test: test_add
-    status: pending
-  - c_test: test_io
-    status: pending
-    selected_file: tests/c/test_io.c
-  - c_test: test_parse
-    status: ported
-    selected_file: tests/c/test_parse.c
-    module: mod_tests_c_test_parse
-"#,
-    )
-    .unwrap();
-
-    let cfg = crate::config::load_config(&cfg_path).unwrap();
-    let items = crate::report::collect_user_action_items(&cfg);
-
-    assert_eq!(
-        items,
-        vec![
-            crate::report::UserActionItem {
-                test_name: "test_add".to_string(),
-                actions: vec![
-                    "pending; add rust_tests and mark as ported when ready".to_string(),
-                    "missing selected_file/module/symbols; confirm mapping".to_string(),
-                ],
-            },
-            crate::report::UserActionItem {
-                test_name: "test_io".to_string(),
-                actions: vec![
-                    "pending; add rust_tests and mark as ported when ready".to_string(),
-                    "missing module/symbols; confirm mapping".to_string(),
-                ],
-            },
-            crate::report::UserActionItem {
-                test_name: "test_parse".to_string(),
-                actions: vec![
-                    "missing symbols; confirm mapping".to_string(),
-                    "status is ported but rust_tests is empty".to_string(),
-                ],
-            },
-        ]
-    );
-}
-
-// ── collect tests ─────────────────────────────────────────────────────────────
-
-#[test]
-fn test_collect_discovers_tests() {
-    let tmp = tempdir();
-
-    // Create project root with C test files.
-    let project_root = tmp.join("project");
-    let tests_dir = project_root.join("tests").join("c");
-    fs::create_dir_all(&tests_dir).unwrap();
-    fs::write(
-        tests_dir.join("test_math.c"),
-        "void test_add() {}\nvoid test_sub() {}\n",
-    )
-    .unwrap();
-
-    // Create a minimal feature workspace.
-    let feature_root = tmp.join("feature");
-    let meta = feature_root.join("meta");
-    fs::create_dir_all(&meta).unwrap();
-    fs::write(meta.join("selected_files.json"), "[]").unwrap();
-    fs::create_dir_all(feature_root.join("rust").join("src")).unwrap();
-
-    let yaml = format!(
-        r#"
-version: 1
-project:
-  root: {project}
-  feature: feature
-feature_source:
-  kind: c2rust_feature
-  root: {feat}
-discovery:
-  paths:
-    - tests/c
-  extensions:
-    - c
-  patterns:
-    - regex: 'void\s+(test_\w+)\s*\(\)'
-      framework: custom
-tests: []
-"#,
-        project = project_root.display(),
-        feat = feature_root.display()
-    );
-
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, &yaml).unwrap();
-
-    let mut cfg = crate::config::load_config(&cfg_path).unwrap();
-    let added = crate::collect::collect_tests(&mut cfg, &cfg_path).unwrap();
-
-    assert_eq!(added, 2, "should discover 2 new tests");
-    let names: Vec<&str> = cfg.tests.iter().map(|t| t.c_test.as_str()).collect();
-    assert!(names.contains(&"test_add"), "test_add should be found");
-    assert!(names.contains(&"test_sub"), "test_sub should be found");
-    // All new entries must carry a source_file.
-    assert!(cfg.tests.iter().all(|t| t.source_file.is_some()));
-}
-
-#[test]
-fn test_collect_is_idempotent() {
-    let tmp = tempdir();
-
-    let project_root = tmp.join("project");
-    let tests_dir = project_root.join("tests").join("c");
-    fs::create_dir_all(&tests_dir).unwrap();
-    fs::write(tests_dir.join("test_math.c"), "void test_add() {}\n").unwrap();
-
-    let feature_root = tmp.join("feature");
-    let meta = feature_root.join("meta");
-    fs::create_dir_all(&meta).unwrap();
-    fs::write(meta.join("selected_files.json"), "[]").unwrap();
-    fs::create_dir_all(feature_root.join("rust").join("src")).unwrap();
-
-    // Pre-populate the manifest with test_add already present (with the same
-    // source_file that collect would assign – the idempotency key is (c_test, source_file)).
-    let yaml = format!(
-        r#"
-version: 1
-project:
-  root: {project}
-  feature: feature
-feature_source:
-  kind: c2rust_feature
-  root: {feat}
-discovery:
-  paths:
-    - tests/c
-  extensions:
-    - c
-  patterns:
-    - regex: 'void\s+(test_\w+)\s*\(\)'
-      framework: custom
-tests:
-  - c_test: test_add
-    source_file: tests/c/test_math.c
-    status: ported
-    rust_tests:
-      - test_add_rust
-"#,
-        project = project_root.display(),
-        feat = feature_root.display()
-    );
-
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, &yaml).unwrap();
-
-    let mut cfg = crate::config::load_config(&cfg_path).unwrap();
-    let added = crate::collect::collect_tests(&mut cfg, &cfg_path).unwrap();
-
-    assert_eq!(added, 0, "nothing new should be added on second run");
-    assert_eq!(cfg.tests.len(), 1);
-    // The existing entry must be untouched.
-    assert_eq!(cfg.tests[0].status, crate::config::TestStatus::Ported);
-    assert_eq!(cfg.tests[0].rust_tests, vec!["test_add_rust"]);
-}
-
-#[test]
-fn test_collect_same_name_different_file_both_added() {
-    let tmp = tempdir();
-
-    let project_root = tmp.join("project");
-    let dir_a = project_root.join("tests").join("a");
-    let dir_b = project_root.join("tests").join("b");
-    fs::create_dir_all(&dir_a).unwrap();
-    fs::create_dir_all(&dir_b).unwrap();
-    fs::write(dir_a.join("test_foo.c"), "void test_foo() {}\n").unwrap();
-    fs::write(dir_b.join("test_foo.c"), "void test_foo() {}\n").unwrap();
-
-    let feature_root = tmp.join("feature");
-    let meta = feature_root.join("meta");
-    fs::create_dir_all(&meta).unwrap();
-    fs::write(meta.join("selected_files.json"), "[]").unwrap();
-    fs::create_dir_all(feature_root.join("rust").join("src")).unwrap();
-
-    let yaml = format!(
-        r#"
-version: 1
-project:
-  root: {project}
-  feature: feature
-feature_source:
-  kind: c2rust_feature
-  root: {feat}
-discovery:
-  paths:
-    - tests/a
-    - tests/b
-  extensions:
-    - c
-  patterns:
-    - regex: 'void\s+(test_\w+)\s*\(\)'
-      framework: custom
-tests: []
-"#,
-        project = project_root.display(),
-        feat = feature_root.display()
-    );
-
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, &yaml).unwrap();
-
-    let mut cfg = crate::config::load_config(&cfg_path).unwrap();
-    let added = crate::collect::collect_tests(&mut cfg, &cfg_path).unwrap();
-
-    // test_foo from a/ and test_foo from b/ are distinct (different source_file).
-    assert_eq!(added, 2, "same name in different files should both be added");
-    let source_files: Vec<_> = cfg.tests.iter().filter_map(|t| t.source_file.as_deref()).collect();
-    assert!(source_files.iter().any(|f| f.contains("tests/a")), "a/ entry missing");
-    assert!(source_files.iter().any(|f| f.contains("tests/b")), "b/ entry missing");
-}
-
-#[test]
-fn test_collect_no_capture_group_warns() {
-    // A regex with no capture group should not panic – it just discovers nothing.
-    let tmp = tempdir();
-
-    let project_root = tmp.join("project");
-    let tests_dir = project_root.join("tests").join("c");
-    fs::create_dir_all(&tests_dir).unwrap();
-    fs::write(tests_dir.join("test.c"), "void test_add() {}\n").unwrap();
-
-    let feature_root = tmp.join("feature");
-    let meta = feature_root.join("meta");
-    fs::create_dir_all(&meta).unwrap();
-    fs::write(meta.join("selected_files.json"), "[]").unwrap();
-    fs::create_dir_all(feature_root.join("rust").join("src")).unwrap();
-
-    let yaml = format!(
-        r#"
-version: 1
-project:
-  root: {project}
-  feature: feature
-feature_source:
-  kind: c2rust_feature
-  root: {feat}
-discovery:
-  paths:
-    - tests/c
-  extensions:
-    - c
-  patterns:
-    - regex: 'void\s+test_\w+\s*\(\)'
-      framework: custom
-tests: []
-"#,
-        project = project_root.display(),
-        feat = feature_root.display()
-    );
-
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, &yaml).unwrap();
-
-    let mut cfg = crate::config::load_config(&cfg_path).unwrap();
-    let added = crate::collect::collect_tests(&mut cfg, &cfg_path).unwrap();
-    // No capture group → no tests discovered, but no crash.
-    assert_eq!(added, 0);
-}
-
-#[test]
-fn test_collect_sorted_output() {
-    let tmp = tempdir();
-
-    let project_root = tmp.join("project");
-    let tests_dir = project_root.join("tests").join("c");
-    fs::create_dir_all(&tests_dir).unwrap();
-    // Write in non-alphabetical order; collect should sort the new entries.
-    fs::write(
-        tests_dir.join("test_z.c"),
-        "void test_zzz() {}\nvoid test_aaa() {}\n",
-    )
-    .unwrap();
-
-    let feature_root = tmp.join("feature");
-    let meta = feature_root.join("meta");
-    fs::create_dir_all(&meta).unwrap();
-    fs::write(meta.join("selected_files.json"), "[]").unwrap();
-    fs::create_dir_all(feature_root.join("rust").join("src")).unwrap();
-
-    let yaml = format!(
-        r#"
-version: 1
-project:
-  root: {project}
-  feature: feature
-feature_source:
-  kind: c2rust_feature
-  root: {feat}
-discovery:
-  paths:
-    - tests/c
-  extensions:
-    - c
-  patterns:
-    - regex: 'void\s+(test_\w+)\s*\(\)'
-      framework: custom
-tests: []
-"#,
-        project = project_root.display(),
-        feat = feature_root.display()
-    );
-
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, &yaml).unwrap();
-
-    let mut cfg = crate::config::load_config(&cfg_path).unwrap();
-    crate::collect::collect_tests(&mut cfg, &cfg_path).unwrap();
-
-    // Within the same source_file the entries should be alphabetically sorted.
-    let names: Vec<&str> = cfg.tests.iter().map(|t| t.c_test.as_str()).collect();
-    let mut sorted = names.clone();
-    sorted.sort();
-    assert_eq!(names, sorted, "collect should append new entries in sorted order");
-}
-
-// ── lint tests ────────────────────────────────────────────────────────────────
-
-#[test]
-fn test_lint_passes_on_valid_manifest() {
-    let tmp = tempdir();
-    let root = make_feature_workspace(&tmp);
-    let index = crate::feature::loader::load(&root).unwrap();
-
-    let yaml = r#"
-version: 1
-project:
-  root: .
-  feature: default
-feature_source:
-  kind: c2rust_feature
-  root: .
-tests:
-  - c_test: test_add
-    status: ported
-    selected_file: src/alpha.c
-    module: mod_src_alpha
-    symbols:
-      - add
-    rust_tests:
-      - rust_test_add
-  - c_test: test_skip
-    status: skipped
-    notes: "not applicable"
-  - c_test: test_na
-    status: not_applicable
-    notes: "Linux only"
-"#;
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, yaml).unwrap();
-    let cfg = crate::config::load_config(&cfg_path).unwrap();
-
-    assert!(crate::lint::lint(&cfg, &index).is_ok());
-}
-
-#[test]
-fn test_lint_catches_missing_module() {
-    let tmp = tempdir();
-    let root = make_feature_workspace(&tmp);
-    let index = crate::feature::loader::load(&root).unwrap();
-
-    let yaml = r#"
-version: 1
-project:
-  root: .
-  feature: default
-feature_source:
-  kind: c2rust_feature
-  root: .
-tests:
-  - c_test: test_foo
-    module: mod_nonexistent
-"#;
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, yaml).unwrap();
-    let cfg = crate::config::load_config(&cfg_path).unwrap();
-
-    let err = crate::lint::lint(&cfg, &index).unwrap_err();
-    let msg = format!("{err}");
-    assert!(msg.contains("lint error"), "expected lint error, got: {msg}");
-}
-
-#[test]
-fn test_lint_catches_ported_without_rust_tests() {
-    let tmp = tempdir();
-    let root = make_feature_workspace(&tmp);
-    let index = crate::feature::loader::load(&root).unwrap();
-
-    let yaml = r#"
-version: 1
-project:
-  root: .
-  feature: default
-feature_source:
-  kind: c2rust_feature
-  root: .
-tests:
-  - c_test: test_add
-    status: ported
-"#;
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, yaml).unwrap();
-    let cfg = crate::config::load_config(&cfg_path).unwrap();
-
-    let err = crate::lint::lint(&cfg, &index).unwrap_err();
-    let msg = format!("{err}");
-    assert!(msg.contains("lint error"), "expected lint error, got: {msg}");
-}
-
-#[test]
-fn test_lint_catches_skipped_without_notes() {
-    let tmp = tempdir();
-    let root = make_feature_workspace(&tmp);
-    let index = crate::feature::loader::load(&root).unwrap();
-
-    let yaml = r#"
-version: 1
-project:
-  root: .
-  feature: default
-feature_source:
-  kind: c2rust_feature
-  root: .
-tests:
-  - c_test: test_skip
-    status: skipped
-"#;
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, yaml).unwrap();
-    let cfg = crate::config::load_config(&cfg_path).unwrap();
-
-    let err = crate::lint::lint(&cfg, &index).unwrap_err();
-    let msg = format!("{err}");
-    assert!(msg.contains("lint error"), "expected lint error, got: {msg}");
-}
-
-#[test]
-fn test_lint_catches_not_applicable_without_notes() {
-    let tmp = tempdir();
-    let root = make_feature_workspace(&tmp);
-    let index = crate::feature::loader::load(&root).unwrap();
-
-    let yaml = r#"
-version: 1
-project:
-  root: .
-  feature: default
-feature_source:
-  kind: c2rust_feature
-  root: .
-tests:
-  - c_test: test_na
-    status: not_applicable
-"#;
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, yaml).unwrap();
-    let cfg = crate::config::load_config(&cfg_path).unwrap();
-
-    let err = crate::lint::lint(&cfg, &index).unwrap_err();
-    let msg = format!("{err}");
-    assert!(msg.contains("lint error"), "expected lint error, got: {msg}");
-}
-
-#[test]
-fn test_lint_catches_symbols_without_module() {
-    let tmp = tempdir();
-    let root = make_feature_workspace(&tmp);
-    let index = crate::feature::loader::load(&root).unwrap();
-
-    let yaml = r#"
-version: 1
-project:
-  root: .
-  feature: default
-feature_source:
-  kind: c2rust_feature
-  root: .
-tests:
-  - c_test: test_add
-    symbols:
-      - add
-"#;
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, yaml).unwrap();
-    let cfg = crate::config::load_config(&cfg_path).unwrap();
-
-    let err = crate::lint::lint(&cfg, &index).unwrap_err();
-    let msg = format!("{err}");
-    assert!(msg.contains("lint error"), "expected lint error, got: {msg}");
-}
-
-#[test]
-fn test_lint_catches_duplicate_entries() {
-    let tmp = tempdir();
-    let root = make_feature_workspace(&tmp);
-    let index = crate::feature::loader::load(&root).unwrap();
-
-    let yaml = r#"
-version: 1
-project:
-  root: .
-  feature: default
-feature_source:
-  kind: c2rust_feature
-  root: .
-tests:
-  - c_test: test_add
-    source_file: tests/c/math.c
-    status: pending
-  - c_test: test_add
-    source_file: tests/c/math.c
-    status: pending
-"#;
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, yaml).unwrap();
-    let cfg = crate::config::load_config(&cfg_path).unwrap();
-
-    let err = crate::lint::lint(&cfg, &index).unwrap_err();
-    let msg = format!("{err}");
-    assert!(msg.contains("lint error"), "expected lint error, got: {msg}");
-}
-
-// ── check tests ───────────────────────────────────────────────────────────────
-
-#[test]
-fn test_check_lint_fails_skips_test_commands() {
-    // A manifest with a lint error: ported entry missing rust_tests.
-    let tmp = tempdir();
-    let root = make_feature_workspace(&tmp);
-    let index = crate::feature::loader::load(&root).unwrap();
-
-    let yaml = r#"
-version: 1
-project:
-  root: .
-  feature: default
-feature_source:
-  kind: c2rust_feature
-  root: .
-test_commands:
-  c: "true"
-  rust: "true"
-tests:
-  - c_test: test_broken
-    status: ported
-"#;
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, yaml).unwrap();
-    let cfg = crate::config::load_config(&cfg_path).unwrap();
-
-    let project_root = tmp.as_path();
-    let summary = crate::check::run(&cfg, &index, project_root);
-
-    assert_eq!(summary.lint, crate::check::StepResult::Failed);
-    // Test commands must be skipped when lint fails.
-    assert_eq!(summary.c_tests, crate::check::StepResult::Skipped);
-    assert_eq!(summary.rust_tests, crate::check::StepResult::Skipped);
-    assert_eq!(summary.feature_rust, None);
-    assert!(!summary.overall_passed());
-}
-
-#[test]
-fn test_check_no_commands_configured() {
-    // Valid manifest, no explicit test commands → C skipped and Rust skipped.
-    let tmp = tempdir();
-    let root = make_feature_workspace(&tmp);
-    let index = crate::feature::loader::load(&root).unwrap();
-
-    let yaml = r#"
-version: 1
-project:
-  root: .
-  feature: default
-feature_source:
-  kind: c2rust_feature
-  root: .
-tests: []
-"#;
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, yaml).unwrap();
-    let cfg = crate::config::load_config(&cfg_path).unwrap();
-
-    let project_root = tmp.as_path();
-    let summary = crate::check::run(&cfg, &index, project_root);
-
-    assert_eq!(summary.lint, crate::check::StepResult::Passed);
-    assert_eq!(summary.c_tests, crate::check::StepResult::Skipped);
-    assert_eq!(summary.rust_tests, crate::check::StepResult::Skipped);
-    assert_eq!(summary.feature_rust, None);
-    assert!(summary.overall_passed());
-}
-
-#[test]
-fn test_check_passing_commands() {
-    // Valid manifest with commands that succeed (using shell `true`).
-    let tmp = tempdir();
-    let root = make_feature_workspace(&tmp);
-    let index = crate::feature::loader::load(&root).unwrap();
-
-    let yaml = r#"
-version: 1
-project:
-  root: .
-  feature: default
-feature_source:
-  kind: c2rust_feature
-  root: .
-test_commands:
-  c: "true"
-  rust: "true"
-tests: []
-"#;
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, yaml).unwrap();
-    let cfg = crate::config::load_config(&cfg_path).unwrap();
-
-    let project_root = tmp.as_path();
-    let summary = crate::check::run(&cfg, &index, project_root);
-
-    assert_eq!(summary.lint, crate::check::StepResult::Passed);
-    assert_eq!(summary.c_tests, crate::check::StepResult::Passed);
-    assert_eq!(summary.rust_tests, crate::check::StepResult::Passed);
-    assert_eq!(summary.feature_rust, None);
-    assert!(summary.overall_passed());
-}
-
-#[test]
-fn test_check_feature_rust_configured_and_failing() {
-    // Legacy-compatible feature_rust still participates in overall pass/fail.
-    let tmp = tempdir();
-    let root = make_feature_workspace(&tmp);
-    let index = crate::feature::loader::load(&root).unwrap();
-
-    let yaml = r#"
-version: 1
-project:
-  root: .
-  feature: default
-feature_source:
-  kind: c2rust_feature
-  root: .
-test_commands:
-  c: "true"
-  rust: "true"
-  feature_rust: "false"
-tests: []
-"#;
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, yaml).unwrap();
-    let cfg = crate::config::load_config(&cfg_path).unwrap();
-
-    let project_root = tmp.as_path();
-    let summary = crate::check::run(&cfg, &index, project_root);
-
-    assert_eq!(summary.lint, crate::check::StepResult::Passed);
-    assert_eq!(summary.c_tests, crate::check::StepResult::Passed);
-    assert_eq!(summary.rust_tests, crate::check::StepResult::Passed);
-    assert_eq!(summary.feature_rust, Some(crate::check::StepResult::Failed));
-    assert!(!summary.overall_passed());
-}
-
-#[test]
-fn test_check_failing_command() {
-    // Valid manifest but a C test command exits non-zero.
-    let tmp = tempdir();
-    let root = make_feature_workspace(&tmp);
-    let index = crate::feature::loader::load(&root).unwrap();
-
-    let yaml = r#"
-version: 1
-project:
-  root: .
-  feature: default
-feature_source:
-  kind: c2rust_feature
-  root: .
-test_commands:
-  c: "false"
-tests: []
-"#;
-    let cfg_path = tmp.join("migration.yml");
-    fs::write(&cfg_path, yaml).unwrap();
-    let cfg = crate::config::load_config(&cfg_path).unwrap();
-
-    let project_root = tmp.as_path();
-    let summary = crate::check::run(&cfg, &index, project_root);
-
-    assert_eq!(summary.lint, crate::check::StepResult::Passed);
-    assert_eq!(summary.c_tests, crate::check::StepResult::Failed);
-    assert_eq!(summary.rust_tests, crate::check::StepResult::Skipped);
-    assert!(!summary.overall_passed());
-}
-
-// ── helpers ───────────────────────────────────────────────────────────────────
-
-fn tempdir() -> PathBuf {
-    let p = std::env::temp_dir()
-        .join(format!("c2rust_helper_test_{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()));
-    fs::create_dir_all(&p).unwrap();
-    p
+    let symbols = vec![
+        crate::InterfaceSymbol {
+            module: "mod_src_foo".to_string(),
+            name: "add".to_string(),
+            kind: crate::SymbolKind::Function,
+        },
+        crate::InterfaceSymbol {
+            module: "mod_src_foo".to_string(),
+            name: "counter".to_string(),
+            kind: crate::SymbolKind::Variable,
+        },
+    ];
+
+    let scanned = crate::scan_rust_tests(dir.path(), &symbols).unwrap();
+    assert_eq!(scanned.len(), 3);
+
+    let dt = scanned.iter().find(|t| t.name == "dt_add_works").unwrap();
+    assert_eq!(dt.kind, crate::TestKind::Dt);
+    assert_eq!(dt.interfaces, vec!["add".to_string()]);
+
+    let dt_system = scanned
+        .iter()
+        .find(|t| t.name == "system_keyword_in_name_but_unit_test")
+        .unwrap();
+    assert_eq!(dt_system.kind, crate::TestKind::Dt);
+
+    let st = scanned.iter().find(|t| t.name == "st_counter_smoke").unwrap();
+    assert_eq!(st.kind, crate::TestKind::St);
+    assert_eq!(st.interfaces, vec!["counter".to_string()]);
 }
