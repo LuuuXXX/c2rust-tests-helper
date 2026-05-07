@@ -1,5 +1,4 @@
 use clap::Parser;
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -270,64 +269,46 @@ fn st_counter_smoke() {
 #[test]
 fn test_scan_and_coverage_write_reports() {
     let dir = create_temp_dir("write-report");
-    let original_dir = env::current_dir().unwrap();
-    env::set_current_dir(dir.path()).unwrap();
+    let meta = dir.path().join("meta");
+    let rust_dir = dir.path().join("rust");
+    fs::create_dir_all(&meta).unwrap();
+    fs::create_dir_all(&rust_dir).unwrap();
 
-    let result = (|| -> anyhow::Result<()> {
-        let meta = dir.path().join("meta");
-        let rust_dir = dir.path().join("rust");
-        fs::create_dir_all(&meta)?;
-        fs::create_dir_all(&rust_dir)?;
-
-        fs::write(
-            meta.join("init-interface-report.md"),
-            r#"
+    fs::write(
+        meta.join("init-interface-report.md"),
+        r#"
 # Init Interface Report — feature `demo`
 
 ## mod_src_foo
 
 ### `add` (function)
 "#,
-        )?;
+    )
+    .unwrap();
 
-        fs::write(
-            rust_dir.join("mod.rs"),
-            r#"
+    fs::write(
+        rust_dir.join("mod.rs"),
+        r#"
 #[test]
 fn dt_add_smoke() {
     unsafe { add(1, 2); }
 }
 "#,
-        )?;
+    )
+    .unwrap();
 
-        let scan_cli = crate::Cli::try_parse_from([
-            "c2rust-tests-helper",
-            "scan",
-            "--dir",
-            rust_dir.to_str().unwrap(),
-        ])
-        .unwrap();
-        crate::run(scan_cli)?;
+    let report_path = meta.join("init-interface-report.md");
+    let scan_output_path = crate::resolve_output_path(&report_path, None, "test-scan-report.md");
+    let coverage_output_path = crate::resolve_output_path(&report_path, None, "coverage-report.md");
 
-        let coverage_cli = crate::Cli::try_parse_from([
-            "c2rust-tests-helper",
-            "coverage",
-            "--dir",
-            rust_dir.to_str().unwrap(),
-        ])
-        .unwrap();
-        crate::run(coverage_cli)?;
+    crate::cmd_scan(&report_path, &rust_dir, &scan_output_path).unwrap();
+    crate::cmd_coverage(&report_path, &rust_dir, &coverage_output_path).unwrap();
 
-        let scan_output = fs::read_to_string(meta.join("test-scan-report.md"))?;
-        assert!(scan_output.contains("| test | type | file | interfaces |"));
-        assert!(scan_output.contains("dt_add_smoke"));
+    let scan_output = fs::read_to_string(meta.join("test-scan-report.md")).unwrap();
+    assert!(scan_output.contains("| test | type | file | interfaces |"));
+    assert!(scan_output.contains("dt_add_smoke"));
 
-        let coverage_output = fs::read_to_string(meta.join("coverage-report.md"))?;
-        assert!(coverage_output.contains("| interface | kind | ST | DT |"));
-        assert!(coverage_output.contains("mod_src_foo::add"));
-        Ok(())
-    })();
-
-    env::set_current_dir(original_dir).unwrap();
-    result.unwrap();
+    let coverage_output = fs::read_to_string(meta.join("coverage-report.md")).unwrap();
+    assert!(coverage_output.contains("| interface | kind | ST | DT |"));
+    assert!(coverage_output.contains("mod_src_foo::add"));
 }
