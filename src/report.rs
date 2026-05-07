@@ -1,14 +1,21 @@
 use std::collections::HashSet;
 
-use crate::config::{Config, TestStatus};
+use crate::config::{Config, TestEntry, TestStatus};
 use crate::feature::index::FeatureIndex;
 
 /// Print a migration-status and feature-coverage report to stdout.
 pub fn report(cfg: &Config, index: &FeatureIndex) {
     print_status_summary(cfg);
+    print_need_user_action(cfg);
     print_surface_totals(index);
     print_coverage(cfg, index);
     print_gaps(cfg, index);
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct UserActionItem {
+    pub test_name: String,
+    pub actions: Vec<String>,
 }
 
 // ── migration status ──────────────────────────────────────────────────────────
@@ -35,6 +42,73 @@ fn print_status_summary(cfg: &Config) {
 
 fn count_status(cfg: &Config, status: TestStatus) -> usize {
     cfg.tests.iter().filter(|t| t.status == status).count()
+}
+
+fn print_need_user_action(cfg: &Config) {
+    let items = collect_user_action_items(cfg);
+
+    println!("=== Need User Action ===");
+    if items.is_empty() {
+        println!("  (none – no user action needed)");
+        println!();
+        return;
+    }
+
+    for item in items {
+        println!("  {}:", item.test_name);
+        for action in item.actions {
+            println!("    - {action}");
+        }
+    }
+    println!();
+}
+
+pub(crate) fn collect_user_action_items(cfg: &Config) -> Vec<UserActionItem> {
+    cfg.tests
+        .iter()
+        .filter_map(user_action_item_for_test)
+        .collect()
+}
+
+fn user_action_item_for_test(entry: &TestEntry) -> Option<UserActionItem> {
+    let mut actions = Vec::new();
+
+    if entry.status == TestStatus::Pending {
+        actions.push("pending; add rust_tests and mark as ported when ready".to_string());
+    }
+
+    if should_check_mapping(entry) {
+        let mut missing = Vec::new();
+        if entry.selected_file.is_none() {
+            missing.push("selected_file");
+        }
+        if entry.module.is_none() {
+            missing.push("module");
+        }
+        if entry.symbols.is_empty() {
+            missing.push("symbols");
+        }
+        if !missing.is_empty() {
+            actions.push(format!("missing {}; confirm mapping", missing.join("/")));
+        }
+    }
+
+    if entry.status == TestStatus::Ported && entry.rust_tests.is_empty() {
+        actions.push("status is ported but rust_tests is empty".to_string());
+    }
+
+    if actions.is_empty() {
+        None
+    } else {
+        Some(UserActionItem {
+            test_name: entry.c_test.clone(),
+            actions,
+        })
+    }
+}
+
+fn should_check_mapping(entry: &TestEntry) -> bool {
+    entry.status != TestStatus::Skipped && entry.status != TestStatus::NotApplicable
 }
 
 // ── feature surface totals ────────────────────────────────────────────────────

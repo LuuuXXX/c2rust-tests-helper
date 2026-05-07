@@ -6,8 +6,9 @@ use clap::{CommandFactory, Parser};
 fn make_feature_workspace(base: &PathBuf) -> PathBuf {
     let root = base.join("feature_root");
     let meta = root.join("meta");
-    let rust_src = root.join("rust").join("src");
-    let mod_a = rust_src.join("mod_alpha");
+    let rust_root = root.join("rust");
+    let rust_src = rust_root.join("src");
+    let mod_a = rust_src.join("mod_src_alpha");
 
     fs::create_dir_all(&meta).unwrap();
     fs::create_dir_all(&mod_a).unwrap();
@@ -18,6 +19,19 @@ fn make_feature_workspace(base: &PathBuf) -> PathBuf {
     )
     .unwrap();
 
+    fs::write(
+        rust_root.join("Cargo.toml"),
+        r#"[package]
+name = "feature-workspace"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+"#,
+    )
+    .unwrap();
+    fs::write(rust_src.join("lib.rs"), "pub fn smoke() -> bool { true }\n").unwrap();
     fs::write(mod_a.join("fun_add.rs"), "// add").unwrap();
     fs::write(mod_a.join("fun_sub.rs"), "// sub").unwrap();
     fs::write(mod_a.join("decl_foo.rs"), "// foo decl").unwrap();
@@ -37,10 +51,33 @@ fn test_load_feature_index() {
     assert_eq!(index.modules.len(), 1);
 
     let m = &index.modules[0];
-    assert_eq!(m.name, "mod_alpha");
+    assert_eq!(m.name, "mod_src_alpha");
+    assert_eq!(m.selected_file.as_deref(), Some("src/alpha.c"));
     assert_eq!(m.functions, vec!["add", "sub"]);
     assert_eq!(m.decls, vec!["foo"]);
     assert_eq!(m.vars, vec!["counter"]);
+}
+
+#[test]
+fn test_load_feature_index_with_absolute_selected_file_paths() {
+    let tmp = tempdir();
+    let root = make_feature_workspace(&tmp);
+    let selected_file = root.join("c").join("src").join("alpha.c2rust");
+    fs::write(
+        root.join("meta").join("selected_files.json"),
+        format!(r#"["{}"]"#, selected_file.display()),
+    )
+    .unwrap();
+
+    let index = crate::feature::loader::load(&root).expect("load should succeed");
+
+    assert_eq!(index.modules.len(), 1);
+    let m = &index.modules[0];
+    assert_eq!(m.name, "mod_src_alpha");
+    assert_eq!(
+        m.selected_file.as_deref(),
+        Some(selected_file.to_string_lossy().as_ref())
+    );
 }
 
 #[test]
@@ -181,6 +218,26 @@ tests:
 }
 
 #[test]
+fn test_config_parse_with_derived_roots() {
+    let yaml = r#"
+version: 1
+project:
+  feature: default
+discovery:
+  paths:
+    - tests/c
+tests: []
+"#;
+    let tmp = tempdir();
+    let cfg_path = tmp.join("migration.yml");
+    fs::write(&cfg_path, yaml).unwrap();
+
+    let cfg = crate::config::load_config(&cfg_path).expect("parse should succeed");
+    assert_eq!(cfg.project.root, "");
+    assert!(cfg.feature_source.is_default());
+}
+
+#[test]
 fn test_cli_accepts_new_commands() {
     let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "discover"]).unwrap();
     match cli.command {
@@ -249,6 +306,270 @@ fn test_cli_help_shows_new_commands_and_legacy_aliases() {
     assert!(help.contains("aliases: report"));
     assert!(help.contains("aliases: check"));
     assert!(help.contains("aliases: surface"));
+}
+
+#[test]
+fn test_validate_config_accepts_derived_project_and_feature_roots() {
+    let tmp = tempdir();
+    let project_root = tmp.join("project");
+    let feature_root = project_root.join(".c2rust").join("default");
+    fs::create_dir_all(feature_root.join("meta")).unwrap();
+    fs::create_dir_all(feature_root.join("rust").join("src")).unwrap();
+    fs::write(
+        feature_root.join("meta").join("selected_files.json"),
+        r#"["tests/c/test_math.c"]"#,
+    )
+    .unwrap();
+
+    let cfg_path = project_root.join("migration.yml");
+    fs::create_dir_all(&project_root).unwrap();
+    fs::write(
+        &cfg_path,
+        r#"
+version: 1
+project:
+  feature: default
+tests: []
+"#,
+    )
+    .unwrap();
+
+    let cfg = crate::config::load_config(&cfg_path).unwrap();
+    crate::validate_config(&cfg, &cfg_path).unwrap();
+}
+
+#[test]
+fn test_cmd_collect_enriches_manifest_from_feature_surface() {
+    let tmp = tempdir();
+    let project_root = tmp.join("project");
+    let tests_dir = project_root.join("tests").join("c");
+    let feature_root = project_root.join(".c2rust").join("default");
+    let module_dir = feature_root.join("rust").join("src").join("mod_tests_c_test_math");
+
+    fs::create_dir_all(&tests_dir).unwrap();
+    fs::create_dir_all(feature_root.join("meta")).unwrap();
+    fs::create_dir_all(&module_dir).unwrap();
+
+    fs::write(tests_dir.join("test_math.c"), "void test_add() {}\n").unwrap();
+    fs::write(
+        feature_root.join("meta").join("selected_files.json"),
+        r#"["tests/c/test_math.c"]"#,
+    )
+    .unwrap();
+    fs::write(module_dir.join("fun_add.rs"), "// add").unwrap();
+
+    let cfg_path = project_root.join("migration.yml");
+    fs::write(
+        &cfg_path,
+        r#"
+version: 1
+project:
+  feature: default
+discovery:
+  paths:
+    - tests/c
+  extensions:
+    - c
+  patterns:
+    - regex: 'void\s+(test_\w+)\s*\(\)'
+      framework: custom
+tests: []
+"#,
+    )
+    .unwrap();
+
+    crate::cmd_collect(&cfg_path).unwrap();
+
+    let cfg = crate::config::load_config(&cfg_path).unwrap();
+    assert_eq!(cfg.tests.len(), 1);
+    let entry = &cfg.tests[0];
+    assert_eq!(entry.c_test, "test_add");
+    assert_eq!(entry.source_file.as_deref(), Some("tests/c/test_math.c"));
+    assert_eq!(entry.selected_file.as_deref(), Some("tests/c/test_math.c"));
+    assert_eq!(entry.module.as_deref(), Some("mod_tests_c_test_math"));
+    assert_eq!(entry.symbols, vec!["add"]);
+}
+
+#[test]
+fn test_cmd_lint_accepts_inferred_manifest_fields() {
+    let tmp = tempdir();
+    let project_root = tmp.join("project");
+    let feature_root = project_root.join(".c2rust").join("default");
+    let module_dir = feature_root.join("rust").join("src").join("mod_tests_c_test_math");
+
+    fs::create_dir_all(feature_root.join("meta")).unwrap();
+    fs::create_dir_all(&module_dir).unwrap();
+    fs::write(
+        feature_root.join("meta").join("selected_files.json"),
+        r#"["tests/c/test_math.c"]"#,
+    )
+    .unwrap();
+    fs::write(module_dir.join("fun_test_add.rs"), "// translated test").unwrap();
+
+    let cfg_path = project_root.join("migration.yml");
+    fs::create_dir_all(&project_root).unwrap();
+    fs::write(
+        &cfg_path,
+        r#"
+version: 1
+project:
+  feature: default
+tests:
+  - c_test: test_add
+    source_file: tests/c/test_math.c
+    status: ported
+    rust_tests:
+      - test_add_ported
+"#,
+    )
+    .unwrap();
+
+    crate::cmd_lint(&cfg_path).unwrap();
+}
+
+#[test]
+fn test_apply_surface_defaults_accepts_absolute_selected_file_path() {
+    let tmp = tempdir();
+    let project_root = tmp.join("project");
+    let feature_root = project_root.join(".c2rust").join("default");
+    let selected_file = feature_root.join("c").join("tests").join("c").join("test_math.c2rust");
+    let module_dir = feature_root
+        .join("rust")
+        .join("src")
+        .join("mod_tests_c_test_math");
+
+    fs::create_dir_all(feature_root.join("meta")).unwrap();
+    fs::create_dir_all(&module_dir).unwrap();
+    fs::write(
+        feature_root.join("meta").join("selected_files.json"),
+        format!(r#"["{}"]"#, selected_file.display()),
+    )
+    .unwrap();
+    fs::write(module_dir.join("fun_test_add.rs"), "// translated test").unwrap();
+
+    let cfg_path = project_root.join("migration.yml");
+    fs::create_dir_all(&project_root).unwrap();
+    fs::write(
+        &cfg_path,
+        r#"
+version: 1
+project:
+  feature: default
+tests:
+  - c_test: test_add
+    source_file: tests/c/test_math.c
+    status: ported
+    rust_tests:
+      - test_add_ported
+"#,
+    )
+    .unwrap();
+
+    let index = crate::feature::loader::load(&feature_root).unwrap();
+    let mut cfg = crate::config::load_config(&cfg_path).unwrap();
+    crate::config::apply_surface_defaults(&mut cfg, &index);
+
+    let entry = &cfg.tests[0];
+    assert_eq!(entry.selected_file.as_deref(), Some(selected_file.to_string_lossy().as_ref()));
+    assert_eq!(entry.module.as_deref(), Some("mod_tests_c_test_math"));
+    assert_eq!(entry.symbols, vec!["test_add"]);
+}
+
+#[test]
+fn test_apply_surface_defaults_strips_test_prefix_for_symbol_inference() {
+    let tmp = tempdir();
+    let project_root = tmp.join("project");
+    let feature_root = project_root.join(".c2rust").join("default");
+    let module_dir = feature_root
+        .join("rust")
+        .join("src")
+        .join("mod_tests_c_test_math");
+
+    fs::create_dir_all(feature_root.join("meta")).unwrap();
+    fs::create_dir_all(&module_dir).unwrap();
+    fs::write(
+        feature_root.join("meta").join("selected_files.json"),
+        r#"["tests/c/test_math.c"]"#,
+    )
+    .unwrap();
+    fs::write(module_dir.join("fun_add.rs"), "// add").unwrap();
+
+    let cfg_path = project_root.join("migration.yml");
+    fs::create_dir_all(&project_root).unwrap();
+    fs::write(
+        &cfg_path,
+        r#"
+version: 1
+project:
+  feature: default
+tests:
+  - c_test: test_add
+    source_file: tests/c/test_math.c
+"#,
+    )
+    .unwrap();
+
+    let index = crate::feature::loader::load(&feature_root).unwrap();
+    let mut cfg = crate::config::load_config(&cfg_path).unwrap();
+    crate::config::apply_surface_defaults(&mut cfg, &index);
+
+    let entry = &cfg.tests[0];
+    assert_eq!(entry.module.as_deref(), Some("mod_tests_c_test_math"));
+    assert_eq!(entry.symbols, vec!["add"]);
+}
+
+#[test]
+fn test_report_collects_need_user_action_items() {
+    let cfg_path = tempdir().join("migration.yml");
+    fs::write(
+        &cfg_path,
+        r#"
+version: 1
+project:
+  feature: default
+tests:
+  - c_test: test_add
+    status: pending
+  - c_test: test_io
+    status: pending
+    selected_file: tests/c/test_io.c
+  - c_test: test_parse
+    status: ported
+    selected_file: tests/c/test_parse.c
+    module: mod_tests_c_test_parse
+"#,
+    )
+    .unwrap();
+
+    let cfg = crate::config::load_config(&cfg_path).unwrap();
+    let items = crate::report::collect_user_action_items(&cfg);
+
+    assert_eq!(
+        items,
+        vec![
+            crate::report::UserActionItem {
+                test_name: "test_add".to_string(),
+                actions: vec![
+                    "pending; add rust_tests and mark as ported when ready".to_string(),
+                    "missing selected_file/module/symbols; confirm mapping".to_string(),
+                ],
+            },
+            crate::report::UserActionItem {
+                test_name: "test_io".to_string(),
+                actions: vec![
+                    "pending; add rust_tests and mark as ported when ready".to_string(),
+                    "missing module/symbols; confirm mapping".to_string(),
+                ],
+            },
+            crate::report::UserActionItem {
+                test_name: "test_parse".to_string(),
+                actions: vec![
+                    "missing symbols; confirm mapping".to_string(),
+                    "status is ported but rust_tests is empty".to_string(),
+                ],
+            },
+        ]
+    );
 }
 
 // ── collect tests ─────────────────────────────────────────────────────────────
@@ -548,7 +869,7 @@ tests:
   - c_test: test_add
     status: ported
     selected_file: src/alpha.c
-    module: mod_alpha
+    module: mod_src_alpha
     symbols:
       - add
     rust_tests:
@@ -775,7 +1096,7 @@ tests:
 
 #[test]
 fn test_check_no_commands_configured() {
-    // Valid manifest, no test_commands → everything skipped except lint.
+    // Valid manifest, no explicit test commands → C skipped and Rust defaults to cargo test.
     let tmp = tempdir();
     let root = make_feature_workspace(&tmp);
     let index = crate::feature::loader::load(&root).unwrap();
@@ -799,7 +1120,7 @@ tests: []
 
     assert_eq!(summary.lint, crate::check::StepResult::Passed);
     assert_eq!(summary.c_tests, crate::check::StepResult::Skipped);
-    assert_eq!(summary.rust_tests, crate::check::StepResult::Skipped);
+    assert_eq!(summary.rust_tests, crate::check::StepResult::Passed);
     assert_eq!(summary.feature_rust, None);
     assert!(summary.overall_passed());
 }
@@ -901,6 +1222,7 @@ tests: []
 
     assert_eq!(summary.lint, crate::check::StepResult::Passed);
     assert_eq!(summary.c_tests, crate::check::StepResult::Failed);
+    assert_eq!(summary.rust_tests, crate::check::StepResult::Passed);
     assert!(!summary.overall_passed());
 }
 

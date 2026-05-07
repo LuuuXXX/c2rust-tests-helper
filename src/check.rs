@@ -46,8 +46,9 @@ impl CheckSummary {
 /// 1. `lint` – validate the manifest against the feature surface.
 /// 2. If lint fails, skip all test commands and return immediately.
 /// 3. Run each configured test command from `project_root`.
-/// 4. Unconfigured `c`/`rust` commands are reported as `skipped`.
-/// 5. Optional legacy `feature_rust` is only included when configured.
+/// 4. Unconfigured `c` commands are reported as `skipped`.
+/// 5. Unconfigured `rust` defaults to `cargo test` from `<feature_root>/rust`.
+/// 6. Optional legacy `feature_rust` is only included when configured.
 pub fn run(cfg: &Config, index: &FeatureIndex, project_root: &Path) -> CheckSummary {
     // ── step 1: lint ──────────────────────────────────────────────────────────
     let lint_result = match crate::lint::lint(cfg, index) {
@@ -72,7 +73,8 @@ pub fn run(cfg: &Config, index: &FeatureIndex, project_root: &Path) -> CheckSumm
 
     // ── step 3: run configured test commands ─────────────────────────────────
     let c_tests = run_optional_command(cfg.test_commands.c.as_deref(), project_root);
-    let rust_tests = run_optional_command(cfg.test_commands.rust.as_deref(), project_root);
+    let rust_tests =
+        run_rust_command(cfg.test_commands.rust.as_deref(), project_root, &index.feature_root);
     let feature_rust = cfg
         .test_commands
         .feature_rust
@@ -113,6 +115,13 @@ fn run_optional_command(cmd: Option<&str>, cwd: &Path) -> StepResult {
     match cmd {
         None => StepResult::Skipped,
         Some(cmd_str) => execute_shell_command(cmd_str, cwd),
+    }
+}
+
+fn run_rust_command(cmd: Option<&str>, project_root: &Path, feature_root: &Path) -> StepResult {
+    match cmd {
+        Some(cmd_str) => execute_shell_command(cmd_str, project_root),
+        None => execute_shell_command("cargo test", &feature_root.join("rust")),
     }
 }
 

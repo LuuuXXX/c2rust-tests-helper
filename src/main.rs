@@ -87,7 +87,7 @@ fn cmd_surface(config_path: &Path) -> Result<()> {
 
     validate_config(&cfg, config_path)?;
 
-    let feature_root = resolve_path(config_path, &cfg.feature_source.root);
+    let feature_root = config::resolve_feature_root(&cfg, config_path);
     let index = feature::load(&feature_root)
         .with_context(|| format!("loading feature surface from {}", feature_root.display()))?;
 
@@ -105,6 +105,10 @@ fn cmd_collect(config_path: &Path) -> Result<()> {
 
     let added = collect::collect_tests(&mut cfg, config_path)
         .with_context(|| "collecting tests")?;
+    let feature_root = config::resolve_feature_root(&cfg, config_path);
+    let index = feature::load(&feature_root)
+        .with_context(|| format!("loading feature surface from {}", feature_root.display()))?;
+    config::apply_surface_defaults(&mut cfg, &index);
 
     config::save_config(config_path, &cfg)
         .with_context(|| format!("writing config back to {}", config_path.display()))?;
@@ -116,14 +120,15 @@ fn cmd_collect(config_path: &Path) -> Result<()> {
 // ── lint ──────────────────────────────────────────────────────────────────────
 
 fn cmd_lint(config_path: &Path) -> Result<()> {
-    let cfg = config::load_config(config_path)
+    let mut cfg = config::load_config(config_path)
         .with_context(|| format!("loading config from {}", config_path.display()))?;
 
     validate_config(&cfg, config_path)?;
 
-    let feature_root = resolve_path(config_path, &cfg.feature_source.root);
+    let feature_root = config::resolve_feature_root(&cfg, config_path);
     let index = feature::load(&feature_root)
         .with_context(|| format!("loading feature surface from {}", feature_root.display()))?;
+    config::apply_surface_defaults(&mut cfg, &index);
 
     lint::lint(&cfg, &index)
 }
@@ -131,14 +136,15 @@ fn cmd_lint(config_path: &Path) -> Result<()> {
 // ── report ────────────────────────────────────────────────────────────────────
 
 fn cmd_report(config_path: &Path) -> Result<()> {
-    let cfg = config::load_config(config_path)
+    let mut cfg = config::load_config(config_path)
         .with_context(|| format!("loading config from {}", config_path.display()))?;
 
     validate_config(&cfg, config_path)?;
 
-    let feature_root = resolve_path(config_path, &cfg.feature_source.root);
+    let feature_root = config::resolve_feature_root(&cfg, config_path);
     let index = feature::load(&feature_root)
         .with_context(|| format!("loading feature surface from {}", feature_root.display()))?;
+    config::apply_surface_defaults(&mut cfg, &index);
 
     report::report(&cfg, &index);
     Ok(())
@@ -147,16 +153,17 @@ fn cmd_report(config_path: &Path) -> Result<()> {
 // ── check ─────────────────────────────────────────────────────────────────────
 
 fn cmd_check(config_path: &Path) -> Result<()> {
-    let cfg = config::load_config(config_path)
+    let mut cfg = config::load_config(config_path)
         .with_context(|| format!("loading config from {}", config_path.display()))?;
 
     validate_config(&cfg, config_path)?;
 
-    let feature_root = resolve_path(config_path, &cfg.feature_source.root);
+    let feature_root = config::resolve_feature_root(&cfg, config_path);
     let index = feature::load(&feature_root)
         .with_context(|| format!("loading feature surface from {}", feature_root.display()))?;
+    config::apply_surface_defaults(&mut cfg, &index);
 
-    let project_root = resolve_path(config_path, &cfg.project.root);
+    let project_root = config::resolve_project_root(&cfg, config_path);
     let summary = check::run(&cfg, &index, &project_root);
 
     check::print_summary(&summary);
@@ -172,7 +179,7 @@ fn cmd_check(config_path: &Path) -> Result<()> {
 // ── validation ────────────────────────────────────────────────────────────────
 
 fn validate_config(cfg: &config::Config, config_path: &Path) -> Result<()> {
-    let project_root = resolve_path(config_path, &cfg.project.root);
+    let project_root = config::resolve_project_root(cfg, config_path);
     if !project_root.exists() {
         bail!(
             "project.root does not exist: {} (resolved from config at {})",
@@ -181,7 +188,7 @@ fn validate_config(cfg: &config::Config, config_path: &Path) -> Result<()> {
         );
     }
 
-    let feature_root = resolve_path(config_path, &cfg.feature_source.root);
+    let feature_root = config::resolve_feature_root(cfg, config_path);
     if !feature_root.exists() {
         bail!(
             "feature_source.root does not exist: {} (resolved from config at {})",
@@ -192,11 +199,11 @@ fn validate_config(cfg: &config::Config, config_path: &Path) -> Result<()> {
 
     // Lightweight consistency check: the last path component of feature_source.root
     // should match project.feature so the two fields don't silently diverge.
-    if let Some(feature_dir) = Path::new(&cfg.feature_source.root).file_name() {
+    if let Some(feature_dir) = feature_root.file_name() {
         let feature_dir = feature_dir.to_str().with_context(|| {
             format!(
                 "feature_source.root last component is not valid UTF-8: {}",
-                cfg.feature_source.root
+                feature_root.display()
             )
         })?;
         if feature_dir != cfg.project.feature {
@@ -210,15 +217,4 @@ fn validate_config(cfg: &config::Config, config_path: &Path) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Resolve `p` relative to the directory that contains `config_path`.
-/// Absolute paths are returned unchanged.
-fn resolve_path(config_path: &Path, p: &str) -> PathBuf {
-    let relative_to = config_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
-    let joined = relative_to.join(p);
-    // Canonicalise if possible; fall back to the joined path.
-    joined.canonicalize().unwrap_or(joined)
 }

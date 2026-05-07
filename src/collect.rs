@@ -15,7 +15,7 @@ use crate::config::{Config, TestEntry};
 ///
 /// Returns the number of newly-added test entries.
 pub fn collect_tests(cfg: &mut Config, config_path: &Path) -> Result<usize> {
-    let project_root = resolve_path(config_path, &cfg.project.root);
+    let project_root = crate::config::resolve_project_root(cfg, config_path);
 
     // Compile all regexes up-front so we bail early on syntax errors.
     let compiled: Vec<Regex> = cfg
@@ -139,12 +139,4 @@ fn has_extension(path: &Path, extensions: &[String]) -> bool {
             extensions.iter().any(|x| x.to_lowercase() == lower)
         })
         .unwrap_or(false)
-}
-
-/// Resolve `p` relative to the directory that contains `config_path`.
-/// Absolute paths are returned unchanged.
-fn resolve_path(config_path: &Path, p: &str) -> PathBuf {
-    let relative_to = config_path.parent().unwrap_or_else(|| Path::new("."));
-    let joined = relative_to.join(p);
-    joined.canonicalize().unwrap_or(joined)
 }
