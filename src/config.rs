@@ -27,7 +27,7 @@ pub struct FeatureSource {
     pub root: String,
 }
 
-/// Per-language test commands used by `check` / `run` subcommands (PR3+).
+/// Test commands used by `verify` / legacy `check`.
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct TestCommands {
     /// Command to run the C test suite (e.g. `"make test"`).
@@ -36,7 +36,8 @@ pub struct TestCommands {
     /// Command to run the translated Rust test suite (e.g. `"cargo test"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rust: Option<String>,
-    /// Command to run the feature-specific Rust test suite, when it differs from `rust`.
+    /// Optional legacy-compatible extra Rust command; prefer putting the exact
+    /// Rust test command in `rust`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feature_rust: Option<String>,
 }

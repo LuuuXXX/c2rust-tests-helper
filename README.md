@@ -81,9 +81,8 @@ feature_source:
   root: ../c2rust-demo/.c2rust/default   # 生成的 feature workspace
 
 test_commands:
-  c: "make test"                              # 运行原始 C 测试
-  rust: "cargo test"                          # 运行翻译后的 Rust 测试
-  feature_rust: "cargo test --features default"  # 可选：feature 专项 Rust 测试
+  c: "make test"
+  rust: "cargo test --features default"
 
 discovery:
   paths:
@@ -107,13 +106,15 @@ tests:
 
 仓库中已附带可直接编辑的示例文件：[`migration.yml`](./migration.yml)。
 
+`test_commands.rust` 支持完整的 Rust 测试命令，例如 `cargo test`、`cargo test --features default`，也可以是指定 package / 指定测试目标的命令。
+
 ## 当前边界
 
 **本工具已实现：**
 - manifest 管理（`migration.yml` 读写、schema 校验）
 - feature surface 校验（来自 `.c2rust/<feature>/...` 的已选文件、模块、符号）
 - 覆盖率与缺口报告
-- 测试执行编排（lint gate → 执行 `test_commands.*` → 统一摘要）
+- 测试执行编排（manifest 校验 → 执行 `test_commands.c` / `test_commands.rust` → 统一摘要）
 
 **本工具暂未实现：**
 - 自动测试→模块/符号推断
@@ -121,9 +122,3 @@ tests:
 - 历史结果缓存
 - JSON/JUnit 报告输出
 - 并行测试执行
-
-## 当前状态
-
-- **PR1** – 配置 schema、feature surface 加载、`surface` 子命令
-- **PR2** – `collect`、`lint`、`report` 子命令；演进后的 `TestEntry` schema
-- **PR3** – `check` 子命令：lint gate + 测试执行 + 统一摘要

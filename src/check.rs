@@ -27,7 +27,7 @@ pub struct CheckSummary {
     pub lint: StepResult,
     pub c_tests: StepResult,
     pub rust_tests: StepResult,
-    pub feature_rust: StepResult,
+    pub feature_rust: Option<StepResult>,
 }
 
 impl CheckSummary {
@@ -36,7 +36,7 @@ impl CheckSummary {
         self.lint != StepResult::Failed
             && self.c_tests != StepResult::Failed
             && self.rust_tests != StepResult::Failed
-            && self.feature_rust != StepResult::Failed
+            && self.feature_rust != Some(StepResult::Failed)
     }
 }
 
@@ -46,7 +46,8 @@ impl CheckSummary {
 /// 1. `lint` – validate the manifest against the feature surface.
 /// 2. If lint fails, skip all test commands and return immediately.
 /// 3. Run each configured test command from `project_root`.
-/// 4. Unconfigured commands are reported as `skipped`.
+/// 4. Unconfigured `c`/`rust` commands are reported as `skipped`.
+/// 5. Optional legacy `feature_rust` is only included when configured.
 pub fn run(cfg: &Config, index: &FeatureIndex, project_root: &Path) -> CheckSummary {
     // ── step 1: lint ──────────────────────────────────────────────────────────
     let lint_result = match crate::lint::lint(cfg, index) {
@@ -61,15 +62,22 @@ pub fn run(cfg: &Config, index: &FeatureIndex, project_root: &Path) -> CheckSumm
             lint: lint_result,
             c_tests: StepResult::Skipped,
             rust_tests: StepResult::Skipped,
-            feature_rust: StepResult::Skipped,
+            feature_rust: cfg
+                .test_commands
+                .feature_rust
+                .as_deref()
+                .map(|_| StepResult::Skipped),
         };
     }
 
     // ── step 3: run configured test commands ─────────────────────────────────
     let c_tests = run_optional_command(cfg.test_commands.c.as_deref(), project_root);
     let rust_tests = run_optional_command(cfg.test_commands.rust.as_deref(), project_root);
-    let feature_rust =
-        run_optional_command(cfg.test_commands.feature_rust.as_deref(), project_root);
+    let feature_rust = cfg
+        .test_commands
+        .feature_rust
+        .as_deref()
+        .map(|cmd| execute_shell_command(cmd, project_root));
 
     CheckSummary {
         lint: lint_result,
@@ -92,7 +100,9 @@ pub fn print_summary(summary: &CheckSummary) {
     println!("lint          : {}", summary.lint);
     println!("c tests       : {}", summary.c_tests);
     println!("rust tests    : {}", summary.rust_tests);
-    println!("feature_rust  : {}", summary.feature_rust);
+    if let Some(feature_rust) = &summary.feature_rust {
+        println!("feature_rust  : {feature_rust}");
+    }
     println!();
     println!("overall       : {overall}");
 }
