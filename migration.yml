@@ -24,7 +24,7 @@ discovery:
       framework: custom
 
 # Each entry maps one C test to the corresponding migration state.
-# Run `collect` to auto-populate this list, then edit mappings by hand.
+# Run `discover` to auto-populate this list, then edit mappings by hand.
 #
 # status values:
 #   pending        – not yet evaluated (default for newly discovered tests)

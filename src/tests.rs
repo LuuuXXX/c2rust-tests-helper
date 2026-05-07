@@ -769,7 +769,7 @@ tests:
     // Test commands must be skipped when lint fails.
     assert_eq!(summary.c_tests, crate::check::StepResult::Skipped);
     assert_eq!(summary.rust_tests, crate::check::StepResult::Skipped);
-    assert_eq!(summary.feature_rust, crate::check::StepResult::Skipped);
+    assert_eq!(summary.feature_rust, None);
     assert!(!summary.overall_passed());
 }
 
@@ -800,7 +800,7 @@ tests: []
     assert_eq!(summary.lint, crate::check::StepResult::Passed);
     assert_eq!(summary.c_tests, crate::check::StepResult::Skipped);
     assert_eq!(summary.rust_tests, crate::check::StepResult::Skipped);
-    assert_eq!(summary.feature_rust, crate::check::StepResult::Skipped);
+    assert_eq!(summary.feature_rust, None);
     assert!(summary.overall_passed());
 }
 
@@ -834,8 +834,43 @@ tests: []
     assert_eq!(summary.lint, crate::check::StepResult::Passed);
     assert_eq!(summary.c_tests, crate::check::StepResult::Passed);
     assert_eq!(summary.rust_tests, crate::check::StepResult::Passed);
-    assert_eq!(summary.feature_rust, crate::check::StepResult::Skipped);
+    assert_eq!(summary.feature_rust, None);
     assert!(summary.overall_passed());
+}
+
+#[test]
+fn test_check_feature_rust_configured_and_failing() {
+    // Legacy-compatible feature_rust still participates in overall pass/fail.
+    let tmp = tempdir();
+    let root = make_feature_workspace(&tmp);
+    let index = crate::feature::loader::load(&root).unwrap();
+
+    let yaml = r#"
+version: 1
+project:
+  root: .
+  feature: default
+feature_source:
+  kind: c2rust_feature
+  root: .
+test_commands:
+  c: "true"
+  rust: "true"
+  feature_rust: "false"
+tests: []
+"#;
+    let cfg_path = tmp.join("migration.yml");
+    fs::write(&cfg_path, yaml).unwrap();
+    let cfg = crate::config::load_config(&cfg_path).unwrap();
+
+    let project_root = tmp.as_path();
+    let summary = crate::check::run(&cfg, &index, project_root);
+
+    assert_eq!(summary.lint, crate::check::StepResult::Passed);
+    assert_eq!(summary.c_tests, crate::check::StepResult::Passed);
+    assert_eq!(summary.rust_tests, crate::check::StepResult::Passed);
+    assert_eq!(summary.feature_rust, Some(crate::check::StepResult::Failed));
+    assert!(!summary.overall_passed());
 }
 
 #[test]
