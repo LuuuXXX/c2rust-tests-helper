@@ -104,11 +104,17 @@ fn test_parse_interface_report_skips_non_module_sections() {
 ## mod_src_foo
 
 ### `kept_symbol` (function)
+
+## my_lib.rs_parser
+
+### `also_kept` (function)
 "#;
     let symbols = crate::parse_interface_report(report).unwrap();
-    assert_eq!(symbols.len(), 1);
+    assert_eq!(symbols.len(), 2);
     assert_eq!(symbols[0].module, "mod_src_foo");
     assert_eq!(symbols[0].name, "kept_symbol");
+    assert_eq!(symbols[1].module, "my_lib.rs_parser");
+    assert_eq!(symbols[1].name, "also_kept");
 }
 
 #[test]

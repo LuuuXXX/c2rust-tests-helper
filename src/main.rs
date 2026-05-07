@@ -145,7 +145,11 @@ fn parse_interface_report(content: &str) -> Result<Vec<InterfaceSymbol>> {
         if let Some(caps) = section_re.captures(trimmed) {
             let module_name = caps[1].trim();
             let lowered = module_name.to_ascii_lowercase();
-            if lowered == "summary" || lowered.contains("lib.rs") {
+            if lowered == "summary"
+                || lowered == "lib.rs"
+                || lowered.starts_with("`lib.rs`")
+                || lowered.starts_with("lib.rs ")
+            {
                 current_module = None;
                 continue;
             }
