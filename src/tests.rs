@@ -1096,7 +1096,7 @@ tests:
 
 #[test]
 fn test_check_no_commands_configured() {
-    // Valid manifest, no explicit test commands → C skipped and Rust defaults to cargo test.
+    // Valid manifest, no explicit test commands → C skipped and Rust skipped.
     let tmp = tempdir();
     let root = make_feature_workspace(&tmp);
     let index = crate::feature::loader::load(&root).unwrap();
@@ -1120,7 +1120,7 @@ tests: []
 
     assert_eq!(summary.lint, crate::check::StepResult::Passed);
     assert_eq!(summary.c_tests, crate::check::StepResult::Skipped);
-    assert_eq!(summary.rust_tests, crate::check::StepResult::Passed);
+    assert_eq!(summary.rust_tests, crate::check::StepResult::Skipped);
     assert_eq!(summary.feature_rust, None);
     assert!(summary.overall_passed());
 }
@@ -1196,7 +1196,7 @@ tests: []
 
 #[test]
 fn test_check_failing_command() {
-    // Valid manifest but a test command exits non-zero.
+    // Valid manifest but a C test command exits non-zero.
     let tmp = tempdir();
     let root = make_feature_workspace(&tmp);
     let index = crate::feature::loader::load(&root).unwrap();
@@ -1222,7 +1222,7 @@ tests: []
 
     assert_eq!(summary.lint, crate::check::StepResult::Passed);
     assert_eq!(summary.c_tests, crate::check::StepResult::Failed);
-    assert_eq!(summary.rust_tests, crate::check::StepResult::Passed);
+    assert_eq!(summary.rust_tests, crate::check::StepResult::Skipped);
     assert!(!summary.overall_passed());
 }
 

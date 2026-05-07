@@ -6,7 +6,7 @@ project:
 # Optional test commands used by `verify`.
 # - `c` is executed from project.root.
 # - `rust` is executed from project.root and can be any complete Rust test command.
-#   If omitted, `verify` falls back to running `cargo test` in `.c2rust/<feature>/rust`.
+#   If omitted, `verify` reports Rust tests as skipped.
 test_commands:
   c: "make test"
   rust: "cargo test --manifest-path .c2rust/default/rust/Cargo.toml"
