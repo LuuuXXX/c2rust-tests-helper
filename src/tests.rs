@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use clap::{CommandFactory, Parser};
 
 /// Create a minimal feature workspace under `base` and return its path.
 fn make_feature_workspace(base: &PathBuf) -> PathBuf {
@@ -177,6 +178,77 @@ tests:
 
     let t3 = &cfg.tests[3];
     assert_eq!(t3.status, crate::config::TestStatus::NotApplicable);
+}
+
+#[test]
+fn test_cli_accepts_new_commands() {
+    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "discover"]).unwrap();
+    match cli.command {
+        crate::Command::Discover { config } => assert_eq!(config, PathBuf::from("migration.yml")),
+        _ => panic!("expected discover command"),
+    }
+
+    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "validate"]).unwrap();
+    match cli.command {
+        crate::Command::Validate { config } => assert_eq!(config, PathBuf::from("migration.yml")),
+        _ => panic!("expected validate command"),
+    }
+
+    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "status"]).unwrap();
+    match cli.command {
+        crate::Command::Status { config } => assert_eq!(config, PathBuf::from("migration.yml")),
+        _ => panic!("expected status command"),
+    }
+
+    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "verify"]).unwrap();
+    match cli.command {
+        crate::Command::Verify { config } => assert_eq!(config, PathBuf::from("migration.yml")),
+        _ => panic!("expected verify command"),
+    }
+
+    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "inspect"]).unwrap();
+    match cli.command {
+        crate::Command::Inspect { config } => assert_eq!(config, PathBuf::from("migration.yml")),
+        _ => panic!("expected inspect command"),
+    }
+}
+
+#[test]
+fn test_cli_legacy_commands_still_work_as_aliases() {
+    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "collect"]).unwrap();
+    assert!(matches!(cli.command, crate::Command::Discover { .. }));
+
+    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "lint"]).unwrap();
+    assert!(matches!(cli.command, crate::Command::Validate { .. }));
+
+    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "report"]).unwrap();
+    assert!(matches!(cli.command, crate::Command::Status { .. }));
+
+    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "check"]).unwrap();
+    assert!(matches!(cli.command, crate::Command::Verify { .. }));
+
+    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "surface"]).unwrap();
+    assert!(matches!(cli.command, crate::Command::Inspect { .. }));
+}
+
+#[test]
+fn test_cli_help_shows_new_commands_and_legacy_aliases() {
+    let mut cmd = crate::Cli::command();
+    let mut help = Vec::new();
+    cmd.write_long_help(&mut help).unwrap();
+    let help = String::from_utf8(help).unwrap();
+
+    assert!(help.contains("discover"));
+    assert!(help.contains("validate"));
+    assert!(help.contains("status"));
+    assert!(help.contains("verify"));
+    assert!(help.contains("inspect"));
+
+    assert!(help.contains("aliases: collect"));
+    assert!(help.contains("aliases: lint"));
+    assert!(help.contains("aliases: report"));
+    assert!(help.contains("aliases: check"));
+    assert!(help.contains("aliases: surface"));
 }
 
 // ── collect tests ─────────────────────────────────────────────────────────────

@@ -30,11 +30,13 @@ export PATH="$PWD/target/release:$PATH"
 
 | 命令 | 说明 |
 |---|---|
-| `surface` | 打印 feature surface（已选文件、模块、符号） |
-| `collect` | 扫描 C 测试并合并写入 `migration.yml` |
-| `lint` | 对照 feature surface 校验 manifest 中的所有条目 |
-| `report` | 显示迁移进度与覆盖/缺口摘要 |
-| `check` | 执行 lint，再运行配置的测试套件，最后打印统一摘要 |
+| `inspect` | Inspect the feature surface from a migration config. |
+| `discover` | Discover C tests and merge them into the migration manifest. |
+| `validate` | Validate the migration manifest against the feature surface. |
+| `status` | Show migration progress, coverage, and unmapped gaps. |
+| `verify` | Validate the manifest and run configured test suites. |
+
+兼容命令（旧命令）仍然可用：`surface`、`collect`、`lint`、`report`、`check`。
 
 ## 核心输入
 
@@ -46,24 +48,22 @@ export PATH="$PWD/target/release:$PATH"
 ## 推荐工作流
 
 ```bash
-# 1. 查看生成的 feature surface。
-c2rust-tests-helper surface --config migration.yml
+# 1. 发现 C 测试，更新 migration.yml
+c2rust-tests-helper discover
 
-# 2. 扫描 C 测试，写入 migration.yml。
-c2rust-tests-helper collect --config migration.yml
-
-# 3. 手动编辑 migration.yml，填写 module/symbols/rust_tests 映射。
+# 2. 编辑映射关系
 $EDITOR migration.yml
 
-# 4. 对照 feature surface 校验编辑内容。
-c2rust-tests-helper lint --config migration.yml
+# 3. 校验映射并运行配置的测试
+c2rust-tests-helper verify
 
-# 5. 查看迁移进度与覆盖缺口。
-c2rust-tests-helper report --config migration.yml
-
-# 6. 执行 lint + 所有已配置的测试套件。
-c2rust-tests-helper check --config migration.yml
+# 可选：查看迁移进度、覆盖率和缺口
+c2rust-tests-helper status
 ```
+
+默认配置文件就是 `migration.yml`，所以普通情况下不需要反复传 `--config migration.yml`。
+
+`inspect` 和 `validate` 适合高级场景或排查问题时使用。
 
 ## 配置示例
 

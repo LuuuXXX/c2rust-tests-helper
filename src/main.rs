@@ -24,32 +24,37 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Load and print the feature surface from a migration config.
-    Surface {
+    /// Inspect the feature surface from a migration config.
+    #[command(visible_alias = "surface")]
+    Inspect {
         /// Path to the migration config file (default: migration.yml).
         #[arg(long, short, default_value = "migration.yml")]
         config: PathBuf,
     },
     /// Discover C tests and merge them into the migration manifest.
-    Collect {
+    #[command(visible_alias = "collect")]
+    Discover {
         /// Path to the migration config file (default: migration.yml).
         #[arg(long, short, default_value = "migration.yml")]
         config: PathBuf,
     },
-    /// Validate the migration manifest against the loaded feature surface.
-    Lint {
+    /// Validate the migration manifest against the feature surface.
+    #[command(visible_alias = "lint")]
+    Validate {
         /// Path to the migration config file (default: migration.yml).
         #[arg(long, short, default_value = "migration.yml")]
         config: PathBuf,
     },
-    /// Print a migration-status and feature-coverage report.
-    Report {
+    /// Show migration progress, coverage, and unmapped gaps.
+    #[command(visible_alias = "report")]
+    Status {
         /// Path to the migration config file (default: migration.yml).
         #[arg(long, short, default_value = "migration.yml")]
         config: PathBuf,
     },
-    /// Validate the manifest and run all configured test suites.
-    Check {
+    /// Validate the manifest and run configured test suites.
+    #[command(visible_alias = "check")]
+    Verify {
         /// Path to the migration config file (default: migration.yml).
         #[arg(long, short, default_value = "migration.yml")]
         config: PathBuf,
@@ -66,11 +71,11 @@ fn main() {
 
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Surface { config } => cmd_surface(&config),
-        Command::Collect { config } => cmd_collect(&config),
-        Command::Lint { config } => cmd_lint(&config),
-        Command::Report { config } => cmd_report(&config),
-        Command::Check { config } => cmd_check(&config),
+        Command::Inspect { config } => cmd_surface(&config),
+        Command::Discover { config } => cmd_collect(&config),
+        Command::Validate { config } => cmd_lint(&config),
+        Command::Status { config } => cmd_report(&config),
+        Command::Verify { config } => cmd_check(&config),
     }
 }
 
