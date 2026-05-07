@@ -75,9 +75,10 @@ version: 1
 project:
   feature: default          # 必填：feature 名称
 
-# 可选；如果省略，`verify` 会默认在 `.c2rust/<feature>/rust` 下执行 `cargo test`
+# 可选测试命令；命令都从 `project.root` 执行
 test_commands:
-  c: "make test"
+  c: "make test" # 可选：C 测试命令
+  rust: "cargo test --manifest-path .c2rust/default/rust/Cargo.toml" # 可选：Rust 测试命令
 
 discovery:
   paths:
@@ -97,7 +98,16 @@ tests: []
 
 `discover`（旧别名 `collect`）会优先读取 `.c2rust/<feature>/meta/selected_files.json` 与 `rust/src/mod_*/`，自动补齐缺失的 `selected_file`、`module`、`symbols` 等字段；通常你只需要补充 `status`、`rust_tests`、`contract`、`notes` 这类无法自动判断的信息。`status` 也会额外输出 `Need User Action` 区块，帮助你快速定位还需要手工确认或补写的测试条目。因此，示例里的 `tests: []` 才是推荐起点：先 `discover`，再补你真正需要维护的状态字段。
 
-`test_commands.rust` 支持完整的 Rust 测试命令，例如 `cargo test`、`cargo test --features default`，也可以是指定 package / 指定测试目标的命令；如果省略该字段，`verify` 会默认在 `<feature_root>/rust` 下执行 `cargo test`，所以多数场景下不需要显式配置它。
+`test_commands.c` 是可选的 C 测试命令；未配置时，`verify` 会将 C 测试记为 `skipped`。
+
+`test_commands.rust` 是可选的 Rust 测试命令，支持任意完整命令（从 `project.root` 执行），例如：
+
+- `cargo test --manifest-path .c2rust/default/rust/Cargo.toml`
+- `cd .c2rust/default/rust && cargo test`
+- `cargo test --features default`
+- `./scripts/test-rust-port.sh`
+
+未配置 `test_commands.rust` 时，`verify` 会将 Rust 测试记为 `skipped`（不会默认执行 `cargo test`）。
 
 ## 当前边界
 
