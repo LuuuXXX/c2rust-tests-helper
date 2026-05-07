@@ -143,7 +143,13 @@ fn parse_interface_report(content: &str) -> Result<Vec<InterfaceSymbol>> {
     for line in content.lines() {
         let trimmed = line.trim();
         if let Some(caps) = section_re.captures(trimmed) {
-            current_module = Some(caps[1].trim().to_string());
+            let module_name = caps[1].trim();
+            let lowered = module_name.to_ascii_lowercase();
+            if lowered == "summary" || lowered.contains("lib.rs") {
+                current_module = None;
+                continue;
+            }
+            current_module = Some(module_name.to_string());
             continue;
         }
         if let Some(caps) = symbol_re.captures(trimmed) {
@@ -230,7 +236,7 @@ fn scan_rust_tests(rust_root: &Path, symbols: &[InterfaceSymbol]) -> Result<Vec<
                         body.push('\n');
                     }
 
-                    let kind = classify_test(&file, &name);
+                    let kind = classify_test(&file);
                     let interfaces = match_interfaces(&format!("{name}\n{body}"), symbols);
                     tests.push(TestMatch {
                         name,
@@ -276,14 +282,9 @@ fn collect_rs_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-fn classify_test(file: &Path, test_name: &str) -> TestKind {
+fn classify_test(file: &Path) -> TestKind {
     let path = file.to_string_lossy().to_ascii_lowercase();
-    let name = test_name.to_ascii_lowercase();
-    if path.contains("/tests/")
-        || path.contains("\\tests\\")
-        || name.starts_with("st_")
-        || name.contains("system")
-    {
+    if path.contains("/tests/") || path.contains("\\tests\\") {
         TestKind::St
     } else {
         TestKind::Dt

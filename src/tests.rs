@@ -91,6 +91,27 @@ fn test_parse_interface_report_function_and_variable() {
 }
 
 #[test]
+fn test_parse_interface_report_skips_non_module_sections() {
+    let report = r#"
+## Summary
+
+### `ignored` (function)
+
+## `lib.rs` — Shared FFI
+
+### `also_ignored` (variable)
+
+## mod_src_foo
+
+### `kept_symbol` (function)
+"#;
+    let symbols = crate::parse_interface_report(report).unwrap();
+    assert_eq!(symbols.len(), 1);
+    assert_eq!(symbols[0].module, "mod_src_foo");
+    assert_eq!(symbols[0].name, "kept_symbol");
+}
+
+#[test]
 fn test_scan_rust_tests_and_match_interfaces() {
     let dir = create_temp_dir("scan");
     let src = dir.path().join("src");
@@ -103,6 +124,11 @@ fn test_scan_rust_tests_and_match_interfaces() {
         r#"
 #[test]
 fn dt_add_works() {
+    assert_eq!(unsafe { add(1, 2) }, 3);
+}
+
+#[test]
+fn system_keyword_in_name_but_unit_test() {
     assert_eq!(unsafe { add(1, 2) }, 3);
 }
 "#,
@@ -134,11 +160,17 @@ fn st_counter_smoke() {
     ];
 
     let scanned = crate::scan_rust_tests(dir.path(), &symbols).unwrap();
-    assert_eq!(scanned.len(), 2);
+    assert_eq!(scanned.len(), 3);
 
     let dt = scanned.iter().find(|t| t.name == "dt_add_works").unwrap();
     assert_eq!(dt.kind, crate::TestKind::Dt);
     assert_eq!(dt.interfaces, vec!["add".to_string()]);
+
+    let dt_system = scanned
+        .iter()
+        .find(|t| t.name == "system_keyword_in_name_but_unit_test")
+        .unwrap();
+    assert_eq!(dt_system.kind, crate::TestKind::Dt);
 
     let st = scanned.iter().find(|t| t.name == "st_counter_smoke").unwrap();
     assert_eq!(st.kind, crate::TestKind::St);
