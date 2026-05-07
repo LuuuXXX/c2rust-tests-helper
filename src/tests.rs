@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -34,25 +35,35 @@ fn test_cli_accepts_new_commands() {
     let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "interface"]).unwrap();
     match cli.command {
         crate::Command::Interface { report } => {
-            assert_eq!(report, PathBuf::from("meta/init-interface-report.md"))
+            assert_eq!(report, None)
         }
         _ => panic!("expected interface command"),
     }
 
     let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "scan"]).unwrap();
     match cli.command {
-        crate::Command::Scan { report, rust_root } => {
-            assert_eq!(report, PathBuf::from("meta/init-interface-report.md"));
+        crate::Command::Scan {
+            report,
+            rust_root,
+            output,
+        } => {
+            assert_eq!(report, None);
             assert_eq!(rust_root, PathBuf::from("."));
+            assert_eq!(output, None);
         }
         _ => panic!("expected scan command"),
     }
 
     let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "coverage"]).unwrap();
     match cli.command {
-        crate::Command::Coverage { report, rust_root } => {
-            assert_eq!(report, PathBuf::from("meta/init-interface-report.md"));
+        crate::Command::Coverage {
+            report,
+            rust_root,
+            output,
+        } => {
+            assert_eq!(report, None);
             assert_eq!(rust_root, PathBuf::from("."));
+            assert_eq!(output, None);
         }
         _ => panic!("expected coverage command"),
     }
@@ -115,6 +126,83 @@ fn test_parse_interface_report_skips_non_module_sections() {
     assert_eq!(symbols[0].name, "kept_symbol");
     assert_eq!(symbols[1].module, "my_lib.rs_parser");
     assert_eq!(symbols[1].name, "also_kept");
+}
+
+#[test]
+fn test_parse_merge_report_symbols() {
+    let report = r#"
+# Merge Interface Report — feature `default`
+
+## Summary
+
+| Item | Count |
+|---|---|
+| modules | 1 |
+
+## `lib.rs` — Shared FFI
+
+- `shared_fn`
+
+## mod_src_foo
+
+### Final Rust functions
+
+- `add`
+- `compute`
+
+### Final Rust variables
+
+- `counter`
+
+### Module-local FFI
+
+- `local_fn`
+
+### Source files merged
+
+- `mod_src_foo/mod.rs`
+
+### Final Rust functions
+
+*(none)*
+"#;
+    let symbols = crate::parse_interface_report(report).unwrap();
+    assert_eq!(symbols.len(), 4);
+    assert_eq!(symbols[0].module, "lib.rs");
+    assert_eq!(symbols[0].name, "shared_fn");
+    assert_eq!(symbols[0].kind, crate::SymbolKind::Function);
+    assert_eq!(symbols[1].module, "mod_src_foo");
+    assert_eq!(symbols[1].name, "add");
+    assert_eq!(symbols[1].kind, crate::SymbolKind::Function);
+    assert_eq!(symbols[2].name, "compute");
+    assert_eq!(symbols[2].kind, crate::SymbolKind::Function);
+    assert_eq!(symbols[3].name, "counter");
+    assert_eq!(symbols[3].kind, crate::SymbolKind::Variable);
+}
+
+#[test]
+fn test_resolve_default_report_path_prefers_init_then_merge() {
+    let dir = create_temp_dir("fallback");
+    let meta = dir.path().join("meta");
+    fs::create_dir_all(&meta).unwrap();
+    fs::write(meta.join("init-interface-report.md"), "# Init Interface Report").unwrap();
+    fs::write(meta.join("merge-interface-report.md"), "# Merge Interface Report").unwrap();
+
+    let resolved = crate::resolve_default_report_path(dir.path()).unwrap();
+    assert_eq!(resolved, PathBuf::from("meta/init-interface-report.md"));
+
+    fs::remove_file(meta.join("init-interface-report.md")).unwrap();
+    let resolved = crate::resolve_default_report_path(dir.path()).unwrap();
+    assert_eq!(resolved, PathBuf::from("meta/merge-interface-report.md"));
+}
+
+#[test]
+fn test_resolve_default_report_path_errors_when_missing() {
+    let dir = create_temp_dir("fallback-missing");
+    let err = crate::resolve_default_report_path(dir.path()).unwrap_err();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("meta/init-interface-report.md"));
+    assert!(msg.contains("meta/merge-interface-report.md"));
 }
 
 #[test]
@@ -181,4 +269,69 @@ fn st_counter_smoke() {
     let st = scanned.iter().find(|t| t.name == "st_counter_smoke").unwrap();
     assert_eq!(st.kind, crate::TestKind::St);
     assert_eq!(st.interfaces, vec!["counter".to_string()]);
+}
+
+#[test]
+fn test_scan_and_coverage_write_reports() {
+    let dir = create_temp_dir("write-report");
+    let original_dir = env::current_dir().unwrap();
+    env::set_current_dir(dir.path()).unwrap();
+
+    let result = (|| -> anyhow::Result<()> {
+        let meta = dir.path().join("meta");
+        let rust_dir = dir.path().join("rust");
+        fs::create_dir_all(&meta)?;
+        fs::create_dir_all(&rust_dir)?;
+
+        fs::write(
+            meta.join("init-interface-report.md"),
+            r#"
+# Init Interface Report — feature `demo`
+
+## mod_src_foo
+
+### `add` (function)
+"#,
+        )?;
+
+        fs::write(
+            rust_dir.join("mod.rs"),
+            r#"
+#[test]
+fn dt_add_smoke() {
+    unsafe { add(1, 2); }
+}
+"#,
+        )?;
+
+        let scan_cli = crate::Cli::try_parse_from([
+            "c2rust-tests-helper",
+            "scan",
+            "--dir",
+            rust_dir.to_str().unwrap(),
+        ])
+        .unwrap();
+        crate::run(scan_cli)?;
+
+        let coverage_cli = crate::Cli::try_parse_from([
+            "c2rust-tests-helper",
+            "coverage",
+            "--dir",
+            rust_dir.to_str().unwrap(),
+        ])
+        .unwrap();
+        crate::run(coverage_cli)?;
+
+        let scan_output = fs::read_to_string(meta.join("test-scan-report.md"))?;
+        assert!(scan_output.contains("| test | type | file | interfaces |"));
+        assert!(scan_output.contains("dt_add_smoke"));
+
+        let coverage_output = fs::read_to_string(meta.join("coverage-report.md"))?;
+        assert!(coverage_output.contains("| interface | kind | ST | DT |"));
+        assert!(coverage_output.contains("mod_src_foo::add"));
+        Ok(())
+    })();
+
+    env::set_current_dir(original_dir).unwrap();
+    result.unwrap();
 }
