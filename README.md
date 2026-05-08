@@ -81,6 +81,21 @@ c2rust-tests-helper scan --dir .c2rust/default/rust
 c2rust-tests-helper coverage --dir .c2rust/default/rust
 ```
 
+## CI 端到端验证（cJSON）
+
+仓库内提供了 `.github/workflows/validate-cjson.yml`，使用
+[`DaveGamble/cJSON`](https://github.com/DaveGamble/cJSON) 作为真实样例，串联完整流程：
+
+1. Checkout `c2rust-tests-helper` 与 `c2rust-demo`
+2. 安装 `gcc clang libclang-dev`、Rust stable、Cargo 缓存、`bindgen-cli`
+3. 构建 `c2rust-demo`，在 `/tmp/cjson` 执行 `init` + `merge`
+4. 打印 `/tmp/cjson/.c2rust` 目录
+5. 构建 `c2rust-tests-helper`
+6. 优先读取 `init-interface-report.md`（不存在时回退到 `merge-interface-report.md`）
+7. 运行：
+   - `c2rust-tests-helper interface --report <resolved-report>`
+   - `c2rust-tests-helper scan --report <resolved-report> --dir /tmp/cjson/.c2rust/default/rust`
+
 ## 参数说明
 
 ### `interface`

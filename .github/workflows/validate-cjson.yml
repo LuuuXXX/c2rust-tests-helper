@@ -1,0 +1,84 @@
+name: Validate cJSON
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate-cjson:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout c2rust-tests-helper
+        uses: actions/checkout@v4
+
+      - name: Checkout c2rust-demo
+        uses: actions/checkout@v4
+        with:
+          repository: LuuuXXX/c2rust-demo
+          path: c2rust-demo
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc clang libclang-dev
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo and targets
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ github.workspace }}/c2rust-demo/target
+            ${{ github.workspace }}/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock', 'c2rust-demo/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install bindgen-cli
+        run: cargo install bindgen-cli
+
+      - name: Build c2rust-demo
+        run: cargo build --release --manifest-path "$GITHUB_WORKSPACE/c2rust-demo/Cargo.toml"
+
+      - name: Clone cJSON
+        run: git clone --depth=1 https://github.com/DaveGamble/cJSON.git /tmp/cjson
+
+      - name: Run c2rust-demo init on cJSON
+        working-directory: /tmp/cjson
+        run: |
+          "$GITHUB_WORKSPACE/c2rust-demo/target/release/c2rust-demo" init -- gcc -c cJSON.c -I.
+
+      - name: Run c2rust-demo merge on cJSON
+        working-directory: /tmp/cjson
+        run: |
+          "$GITHUB_WORKSPACE/c2rust-demo/target/release/c2rust-demo" merge
+
+      - name: Print .c2rust tree
+        if: always()
+        working-directory: /tmp/cjson
+        run: find .c2rust -print
+
+      - name: Build c2rust-tests-helper
+        run: cargo build --release --manifest-path "$GITHUB_WORKSPACE/Cargo.toml"
+
+      - name: Resolve report path
+        run: |
+          if [ -f /tmp/cjson/.c2rust/default/meta/init-interface-report.md ]; then
+            echo "REPORT_PATH=/tmp/cjson/.c2rust/default/meta/init-interface-report.md" >> "$GITHUB_ENV"
+          else
+            echo "REPORT_PATH=/tmp/cjson/.c2rust/default/meta/merge-interface-report.md" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run interface
+        run: |
+          "$GITHUB_WORKSPACE/target/release/c2rust-tests-helper" interface \
+            --report "$REPORT_PATH"
+
+      - name: Run scan
+        run: |
+          "$GITHUB_WORKSPACE/target/release/c2rust-tests-helper" scan \
+            --report "$REPORT_PATH" \
+            --dir /tmp/cjson/.c2rust/default/rust
