@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  # ── Job 1: standard Rust build + unit tests + lint ──────────────────────────
+  build-and-test:
+    name: Build, test, and lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Unit tests
+        run: cargo test
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+  # ── Job 2: cJSON end-to-end demo ─────────────────────────────────────────────
+  #
+  # Simulates the full workflow:
+  #   1. c2rust-demo init  →  produces meta/init-interface-report.md
+  #                           (represented here by examples/cjson/meta/init-interface-report.md)
+  #   2. c2rust-tests-helper discover  →  scan C test files, produce discovery report
+  #   3. c2rust-tests-helper map       →  map tests to interface symbols, produce map report
+  #
+  cjson-end-to-end:
+    name: cJSON end-to-end demo
+    runs-on: ubuntu-latest
+    needs: build-and-test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release binary
+        run: cargo build --release
+
+      # ── Step 1 (c2rust-demo phase) ──────────────────────────────────────────
+      # In a real project `c2rust-demo init` would translate the cJSON C library
+      # into a Rust workspace and emit meta/init-interface-report.md.
+      # For this CI demo we use the pre-prepared report that mirrors that output.
+      - name: Show interface report (c2rust-demo output)
+        run: |
+          echo "=== Interface symbols from c2rust-demo init ==="
+          ./target/release/c2rust-tests-helper interface \
+            --report examples/cjson/meta/init-interface-report.md
+
+      # ── Step 2: discover C tests ─────────────────────────────────────────────
+      - name: Discover C tests in cJSON test suite
+        run: |
+          ./target/release/c2rust-tests-helper discover \
+            --dir examples/cjson/tests \
+            --output /tmp/cjson-discovery.md
+          echo "--- discovery report ---"
+          cat /tmp/cjson-discovery.md
+
+      - name: Verify discovery report
+        run: |
+          grep -q "test_parse_basic"         /tmp/cjson-discovery.md
+          grep -q "test_parse_array"         /tmp/cjson-discovery.md
+          grep -q "test_parse_and_print"     /tmp/cjson-discovery.md
+          grep -q "test_create_null"         /tmp/cjson-discovery.md
+          grep -q "test_create_object"       /tmp/cjson-discovery.md
+          grep -q "test_create_item_reference" /tmp/cjson-discovery.md
+          grep -q "| total C tests | 15 |"  /tmp/cjson-discovery.md
+          echo "✓ discovery report verified (15 test functions found)"
+
+      # ── Step 3: map C tests to interface symbols ─────────────────────────────
+      - name: Map C tests to cJSON interface candidates
+        run: |
+          ./target/release/c2rust-tests-helper map \
+            --report examples/cjson/meta/init-interface-report.md \
+            --dir     examples/cjson/tests \
+            --output  /tmp/cjson-map.md
+          echo "--- map report ---"
+          cat /tmp/cjson-map.md
+
+      - name: Verify mapping report — candidate symbols present
+        run: |
+          grep -q "cJSON_Parse"      /tmp/cjson-map.md
+          grep -q "cJSON_CreateNull" /tmp/cjson-map.md
+          grep -q "cJSON_Delete"     /tmp/cjson-map.md
+          echo "✓ expected interface symbols found in map report"
+
+      - name: Verify mapping report — per-function isolation
+        run: |
+          # test_create_null only calls cJSON_CreateNull + cJSON_Delete;
+          # it must NOT reference cJSON_Parse (which belongs to test_parse_* functions).
+          if grep "^| test_create_null " /tmp/cjson-map.md | grep -q "cJSON_Parse"; then
+            echo "✗ per-function isolation broken: test_create_null matched cJSON_Parse"
+            exit 1
+          fi
+          # test_parse_basic only calls cJSON_Parse + cJSON_GetObjectItem + cJSON_Delete;
+          # it must NOT reference cJSON_CreateNull (which belongs to test_create_null).
+          if grep "^| test_parse_basic " /tmp/cjson-map.md | grep -q "cJSON_CreateNull"; then
+            echo "✗ per-function isolation broken: test_parse_basic matched cJSON_CreateNull"
+            exit 1
+          fi
+          echo "✓ per-function candidate isolation verified"
+
+      - name: Verify mapping report — summary counts
+        run: |
+          grep -q "| total C tests | 15 |"          /tmp/cjson-map.md
+          grep -q "| total interface symbols | 28 |" /tmp/cjson-map.md
+          echo "✓ summary counts verified"
