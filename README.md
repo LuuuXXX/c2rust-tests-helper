@@ -115,3 +115,8 @@ meta/
 └── c-test-map-report.md          # c2rust-tests-helper map 生成
 ```
 
+## 示例
+
+[`examples/cjson/`](examples/cjson/README.md) — 以 cJSON 为例，展示完整工作流：
+c2rust-demo 生成接口报告 → `discover` 扫描 C 测试 → `map` 生成候选映射报告。
+
