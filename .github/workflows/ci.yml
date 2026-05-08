@@ -72,29 +72,40 @@ jobs:
       - name: Set c2rust-demo revision
         run: echo "C2RUST_DEMO_REV=91e76bce9e3801c278e61e17a73b38a2e23913d8" >> "$GITHUB_ENV"
 
-      # ── Cache compiled cargo binaries (bindgen + c2rust-demo) ───────────────
-      # Key includes the pinned c2rust-demo rev so that bumping the rev above
-      # automatically invalidates the cache and forces a fresh install.
-      - name: Cache cargo binaries
-        id: cache-cargo-bin
+      # bindgen-cli is required by c2rust-demo's init split (clang AST → Rust)
+      - name: Cache bindgen-cli binary
+        id: cache-bindgen
         uses: actions/cache@v4
         with:
-          path: ~/.cargo/bin
-          key: ${{ runner.os }}-cargo-bin-bindgen-c2rust-demo-${{ env.C2RUST_DEMO_REV }}
+          path: ~/.cargo/bin/bindgen
+          key: ${{ runner.os }}-bindgen-cli-v1
 
-      # bindgen-cli is required by c2rust-demo's init split (clang AST → Rust)
       - name: Install bindgen-cli
-        if: steps.cache-cargo-bin.outputs.cache-hit != 'true'
+        if: steps.cache-bindgen.outputs.cache-hit != 'true'
         run: cargo install bindgen-cli
 
-      # c2rust-demo performs C build capture + Rust scaffolding generation.
-      # Pinned to a specific commit for reproducible CI builds.
-      - name: Install c2rust-demo
-        if: steps.cache-cargo-bin.outputs.cache-hit != 'true'
+      # c2rust-demo must be built from source, not installed via `cargo install`.
+      #
+      # c2rust-demo's hook_dir() locates hook/Makefile by walking up from the
+      # running binary's location.  When the binary lives at:
+      #   ~/c2rust-demo-src/target/release/c2rust-demo
+      # it walks: target/release → target → ~/c2rust-demo-src
+      # and finds ~/c2rust-demo-src/hook/Makefile  ✓
+      #
+      # `cargo install --git` puts the binary in ~/.cargo/bin where there is no
+      # adjacent hook/ directory, causing the "hook/ directory not found" error.
+      - name: Clone c2rust-demo at pinned revision
         run: |
-          cargo install \
-            --git https://github.com/LuuuXXX/c2rust-demo.git \
-            --rev "$C2RUST_DEMO_REV"
+          git clone https://github.com/LuuuXXX/c2rust-demo.git ~/c2rust-demo-src
+          cd ~/c2rust-demo-src && git checkout "$C2RUST_DEMO_REV"
+
+      - name: Build c2rust-demo
+        run: cargo build --release
+        working-directory: ~/c2rust-demo-src
+
+      # Put the freshly-built binary on PATH.
+      - name: Add c2rust-demo to PATH
+        run: echo "$HOME/c2rust-demo-src/target/release" >> "$GITHUB_PATH"
 
       # ── Build c2rust-tests-helper ───────────────────────────────────────────
       - name: Build c2rust-tests-helper
