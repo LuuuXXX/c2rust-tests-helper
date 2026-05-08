@@ -5,6 +5,9 @@ on:
     branches: ["**"]
   pull_request:
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
   # ── Job 1: standard Rust build + unit tests + lint ──────────────────────────
   build-and-test:
@@ -23,37 +26,116 @@ jobs:
       - name: Clippy
         run: cargo clippy -- -D warnings
 
-  # ── Job 2: cJSON end-to-end demo ─────────────────────────────────────────────
+  # ── Job 2: cJSON end-to-end (real pipeline) ──────────────────────────────────
   #
-  # Simulates the full workflow:
-  #   1. c2rust-demo init  →  produces meta/init-interface-report.md
-  #                           (represented here by examples/cjson/meta/init-interface-report.md)
-  #   2. c2rust-tests-helper discover  →  scan C test files, produce discovery report
-  #   3. c2rust-tests-helper map       →  map tests to interface symbols, produce map report
+  # Runs the full intended workflow against the real open-source cJSON project:
+  #
+  #   1. Install c2rust-demo (https://github.com/LuuuXXX/c2rust-demo)
+  #   2. Clone cJSON (https://github.com/DaveGamble/cJSON)
+  #   3. c2rust-demo init -- make -C build
+  #        → captures cJSON C compilation via LD_PRELOAD hook
+  #        → runs clang AST analysis + bindgen
+  #        → emits .c2rust/<feature>/meta/init-interface-report.md
+  #   4. c2rust-tests-helper discover  →  find test_ functions in C test files
+  #   5. c2rust-tests-helper map       →  map each test to interface symbols
+  #
+  # Note: the real cJSON test suite uses `static void cjson_xxx_should_yyy()`
+  # naming which does not follow the test_ heuristic this tool targets.
+  # The C test files in examples/cjson/tests/ are purpose-written to demonstrate
+  # the tool's conventions and are used for steps 4 and 5.
   #
   cjson-end-to-end:
-    name: cJSON end-to-end demo
+    name: cJSON end-to-end (real pipeline)
     runs-on: ubuntu-latest
     needs: build-and-test
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build release binary
+      # ── Install system prerequisites ────────────────────────────────────────
+      - name: Install system dependencies (clang, cmake, make)
+        run: sudo apt-get update && sudo apt-get install -y clang cmake make
+
+      # ── Cache cargo registry / git sources ─────────────────────────────────
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-reg-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-reg-
+
+      # c2rust-demo commit to pin against — bump this SHA when updating the tool
+      # Latest: 91e76bce (2026-05-07 "补全接口测试")
+      - name: Set c2rust-demo revision
+        run: echo "C2RUST_DEMO_REV=91e76bce9e3801c278e61e17a73b38a2e23913d8" >> "$GITHUB_ENV"
+
+      # ── Cache compiled cargo binaries (bindgen + c2rust-demo) ───────────────
+      # Key includes the pinned c2rust-demo rev so that bumping the rev above
+      # automatically invalidates the cache and forces a fresh install.
+      - name: Cache cargo binaries
+        id: cache-cargo-bin
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin
+          key: ${{ runner.os }}-cargo-bin-bindgen-c2rust-demo-${{ env.C2RUST_DEMO_REV }}
+
+      # bindgen-cli is required by c2rust-demo's init split (clang AST → Rust)
+      - name: Install bindgen-cli
+        if: steps.cache-cargo-bin.outputs.cache-hit != 'true'
+        run: cargo install bindgen-cli
+
+      # c2rust-demo performs C build capture + Rust scaffolding generation.
+      # Pinned to a specific commit for reproducible CI builds.
+      - name: Install c2rust-demo
+        if: steps.cache-cargo-bin.outputs.cache-hit != 'true'
+        run: |
+          cargo install \
+            --git https://github.com/LuuuXXX/c2rust-demo.git \
+            --rev "$C2RUST_DEMO_REV"
+
+      # ── Build c2rust-tests-helper ───────────────────────────────────────────
+      - name: Build c2rust-tests-helper
         run: cargo build --release
 
-      # ── Step 1 (c2rust-demo phase) ──────────────────────────────────────────
-      # In a real project `c2rust-demo init` would translate the cJSON C library
-      # into a Rust workspace and emit meta/init-interface-report.md.
-      # For this CI demo we use the pre-prepared report that mirrors that output.
-      - name: Show interface report (c2rust-demo output)
+      # ── Step 1: run c2rust-demo init on real cJSON ──────────────────────────
+      - name: Clone real cJSON from GitHub
+        run: git clone --depth=1 https://github.com/DaveGamble/cJSON.git /tmp/cjson
+
+      - name: Configure cJSON build with cmake
+        run: cmake -S /tmp/cjson -B /tmp/cjson/build -DCMAKE_BUILD_TYPE=Release
+
+      # c2rust-demo init:
+      #   - builds hook/libhook.so to intercept gcc/clang during make
+      #   - runs  make -C build  with LD_PRELOAD=libhook.so
+      #   - performs clang AST analysis and bindgen on captured .c2rust files
+      #   - writes  /tmp/cjson/.c2rust/default/meta/init-interface-report.md
+      - name: Run c2rust-demo init on cJSON
+        working-directory: /tmp/cjson
+        run: c2rust-demo init -- make -C build
+
+      - name: Locate generated interface report
         run: |
-          echo "=== Interface symbols from c2rust-demo init ==="
-          ./target/release/c2rust-tests-helper interface \
-            --report examples/cjson/meta/init-interface-report.md
+          REPORT=$(find /tmp/cjson/.c2rust -name "init-interface-report.md" | head -1)
+          if [ -z "$REPORT" ]; then
+            echo "ERROR: init-interface-report.md not found — dumping .c2rust tree:"
+            find /tmp/cjson/.c2rust -type f || true
+            exit 1
+          fi
+          echo "INTERFACE_REPORT=$REPORT" >> "$GITHUB_ENV"
+          echo "Found interface report: $REPORT"
+
+      - name: Show interface symbols (c2rust-demo output)
+        run: |
+          echo "=== Interface symbols generated by c2rust-demo init ==="
+          ./target/release/c2rust-tests-helper interface --report "$INTERFACE_REPORT"
 
       # ── Step 2: discover C tests ─────────────────────────────────────────────
-      - name: Discover C tests in cJSON test suite
+      # examples/cjson/tests/ contains purpose-written C test files that follow
+      # the test_ naming convention expected by this tool.
+      - name: Discover C tests
         run: |
           ./target/release/c2rust-tests-helper discover \
             --dir examples/cjson/tests \
@@ -61,52 +143,53 @@ jobs:
           echo "--- discovery report ---"
           cat /tmp/cjson-discovery.md
 
-      - name: Verify discovery report
+      - name: Verify discovery report (15 test functions)
         run: |
-          grep -q "test_parse_basic"         /tmp/cjson-discovery.md
-          grep -q "test_parse_array"         /tmp/cjson-discovery.md
-          grep -q "test_parse_and_print"     /tmp/cjson-discovery.md
-          grep -q "test_create_null"         /tmp/cjson-discovery.md
-          grep -q "test_create_object"       /tmp/cjson-discovery.md
+          grep -q "test_parse_basic"           /tmp/cjson-discovery.md
+          grep -q "test_parse_array"           /tmp/cjson-discovery.md
+          grep -q "test_parse_and_print"       /tmp/cjson-discovery.md
+          grep -q "test_create_null"           /tmp/cjson-discovery.md
+          grep -q "test_create_object"         /tmp/cjson-discovery.md
           grep -q "test_create_item_reference" /tmp/cjson-discovery.md
-          grep -q "| total C tests | 15 |"  /tmp/cjson-discovery.md
-          echo "✓ discovery report verified (15 test functions found)"
+          grep -q "| total C tests | 15 |"    /tmp/cjson-discovery.md
+          echo "✓ All 15 representative C test functions discovered"
 
-      # ── Step 3: map C tests to interface symbols ─────────────────────────────
+      # ── Step 3: map C tests → interface symbols ──────────────────────────────
+      # Uses the interface report generated by c2rust-demo above (not the
+      # bundled example) so the mapping reflects real c2rust-demo output.
       - name: Map C tests to cJSON interface candidates
         run: |
           ./target/release/c2rust-tests-helper map \
-            --report examples/cjson/meta/init-interface-report.md \
+            --report "$INTERFACE_REPORT" \
             --dir     examples/cjson/tests \
             --output  /tmp/cjson-map.md
           echo "--- map report ---"
           cat /tmp/cjson-map.md
 
-      - name: Verify mapping report — candidate symbols present
+      - name: Verify mapping — cJSON API symbols appear
         run: |
           grep -q "cJSON_Parse"      /tmp/cjson-map.md
           grep -q "cJSON_CreateNull" /tmp/cjson-map.md
           grep -q "cJSON_Delete"     /tmp/cjson-map.md
-          echo "✓ expected interface symbols found in map report"
+          echo "✓ Expected cJSON interface symbols found in mapping report"
 
-      - name: Verify mapping report — per-function isolation
+      - name: Verify mapping — per-function isolation
         run: |
           # test_create_null only calls cJSON_CreateNull + cJSON_Delete;
-          # it must NOT reference cJSON_Parse (which belongs to test_parse_* functions).
+          # it must NOT match cJSON_Parse (which lives in test_parse_* bodies).
           if grep "^| test_create_null " /tmp/cjson-map.md | grep -q "cJSON_Parse"; then
             echo "✗ per-function isolation broken: test_create_null matched cJSON_Parse"
             exit 1
           fi
           # test_parse_basic only calls cJSON_Parse + cJSON_GetObjectItem + cJSON_Delete;
-          # it must NOT reference cJSON_CreateNull (which belongs to test_create_null).
+          # it must NOT match cJSON_CreateNull (which lives in test_create_null body).
           if grep "^| test_parse_basic " /tmp/cjson-map.md | grep -q "cJSON_CreateNull"; then
             echo "✗ per-function isolation broken: test_parse_basic matched cJSON_CreateNull"
             exit 1
           fi
-          echo "✓ per-function candidate isolation verified"
+          echo "✓ Per-function candidate isolation verified"
 
-      - name: Verify mapping report — summary counts
+      - name: Verify mapping — test function count
         run: |
-          grep -q "| total C tests | 15 |"          /tmp/cjson-map.md
-          grep -q "| total interface symbols | 28 |" /tmp/cjson-map.md
-          echo "✓ summary counts verified"
+          grep -q "| total C tests | 15 |" /tmp/cjson-map.md
+          echo "✓ Summary count verified (15 test functions mapped)"
