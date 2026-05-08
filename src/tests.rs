@@ -198,6 +198,63 @@ fn test_resolve_default_report_path_errors_when_missing() {
     let msg = format!("{err:#}");
     assert!(msg.contains("meta/init-interface-report.md"));
     assert!(msg.contains("meta/merge-interface-report.md"));
+    assert!(msg.contains(".c2rust/<feature>/meta/{init,merge}-interface-report.md"));
+}
+
+#[test]
+fn test_resolve_default_report_path_finds_c2rust_feature_init() {
+    let dir = create_temp_dir("fallback-c2rust-init");
+    let meta = dir.path().join(".c2rust/default/meta");
+    fs::create_dir_all(&meta).unwrap();
+    let report_path = meta.join("init-interface-report.md");
+    fs::write(&report_path, "# Init Interface Report").unwrap();
+
+    let resolved = crate::resolve_default_report_path(dir.path()).unwrap();
+    assert_eq!(resolved, report_path);
+}
+
+#[test]
+fn test_resolve_default_report_path_finds_c2rust_feature_merge() {
+    let dir = create_temp_dir("fallback-c2rust-merge");
+    let meta = dir.path().join(".c2rust/default/meta");
+    fs::create_dir_all(&meta).unwrap();
+    let report_path = meta.join("merge-interface-report.md");
+    fs::write(&report_path, "# Merge Interface Report").unwrap();
+
+    let resolved = crate::resolve_default_report_path(dir.path()).unwrap();
+    assert_eq!(resolved, report_path);
+}
+
+#[test]
+fn test_resolve_default_report_path_prefers_meta_over_c2rust() {
+    let dir = create_temp_dir("fallback-meta-priority");
+    let meta = dir.path().join("meta");
+    fs::create_dir_all(&meta).unwrap();
+    fs::write(meta.join("init-interface-report.md"), "# Init Interface Report").unwrap();
+
+    let c2rust_meta = dir.path().join(".c2rust/default/meta");
+    fs::create_dir_all(&c2rust_meta).unwrap();
+    fs::write(
+        c2rust_meta.join("init-interface-report.md"),
+        "# C2rust Init Interface Report",
+    )
+    .unwrap();
+
+    let resolved = crate::resolve_default_report_path(dir.path()).unwrap();
+    assert_eq!(resolved, PathBuf::from("meta/init-interface-report.md"));
+}
+
+#[test]
+fn test_resolve_default_report_path_c2rust_prefers_init_over_merge() {
+    let dir = create_temp_dir("fallback-c2rust-priority");
+    let meta = dir.path().join(".c2rust/default/meta");
+    fs::create_dir_all(&meta).unwrap();
+    let init_path = meta.join("init-interface-report.md");
+    fs::write(&init_path, "# Init Interface Report").unwrap();
+    fs::write(meta.join("merge-interface-report.md"), "# Merge Interface Report").unwrap();
+
+    let resolved = crate::resolve_default_report_path(dir.path()).unwrap();
+    assert_eq!(resolved, init_path);
 }
 
 #[test]

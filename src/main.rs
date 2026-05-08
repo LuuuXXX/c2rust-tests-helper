@@ -109,8 +109,32 @@ fn resolve_default_report_path(current_dir: &Path) -> Result<PathBuf> {
     if merge.exists() {
         return Ok(PathBuf::from(MERGE_REPORT_PATH));
     }
+    let c2rust_dir = current_dir.join(".c2rust");
+    if let Ok(entries) = fs::read_dir(&c2rust_dir) {
+        let mut feature_dirs = entries
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| match entry.file_type() {
+                Ok(file_type) if file_type.is_dir() => Some((entry.file_name(), entry.path())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        feature_dirs.sort_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+
+        for (_, feature_dir) in &feature_dirs {
+            let feature_init = feature_dir.join(INIT_REPORT_PATH);
+            if feature_init.exists() {
+                return Ok(feature_init);
+            }
+        }
+        for (_, feature_dir) in &feature_dirs {
+            let feature_merge = feature_dir.join(MERGE_REPORT_PATH);
+            if feature_merge.exists() {
+                return Ok(feature_merge);
+            }
+        }
+    }
     anyhow::bail!(
-        "interface report not found: tried {} and {}",
+        "interface report not found: tried {}, {}, and .c2rust/<feature>/meta/{{init,merge}}-interface-report.md",
         INIT_REPORT_PATH,
         MERGE_REPORT_PATH
     );
