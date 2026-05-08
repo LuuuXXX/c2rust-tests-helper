@@ -114,19 +114,19 @@ fn resolve_default_report_path(current_dir: &Path) -> Result<PathBuf> {
         let mut feature_dirs = entries
             .filter_map(|entry| entry.ok())
             .filter_map(|entry| match entry.file_type() {
-                Ok(file_type) if file_type.is_dir() => Some(entry.path()),
+                Ok(file_type) if file_type.is_dir() => Some((entry.file_name(), entry.path())),
                 _ => None,
             })
             .collect::<Vec<_>>();
-        feature_dirs.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+        feature_dirs.sort_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
 
-        for feature_dir in &feature_dirs {
+        for (_, feature_dir) in &feature_dirs {
             let feature_init = feature_dir.join(INIT_REPORT_PATH);
             if feature_init.exists() {
                 return Ok(feature_init);
             }
         }
-        for feature_dir in &feature_dirs {
+        for (_, feature_dir) in &feature_dirs {
             let feature_merge = feature_dir.join(MERGE_REPORT_PATH);
             if feature_merge.exists() {
                 return Ok(feature_merge);
