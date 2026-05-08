@@ -7,6 +7,11 @@ use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const INIT_REPORT_PATH: &str = "meta/init-interface-report.md";
+const MERGE_REPORT_PATH: &str = "meta/merge-interface-report.md";
+const SCAN_OUTPUT_FILE: &str = "test-scan-report.md";
+const COVERAGE_OUTPUT_FILE: &str = "coverage-report.md";
+
 #[derive(Parser)]
 #[command(
     name = "c2rust-tests-helper",
@@ -20,29 +25,35 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// List all external interface symbols parsed from init-interface-report.md.
+    /// List all external interface symbols parsed from interface report.
     Interface {
-        /// Path to interface report file.
-        #[arg(long, short = 'r', default_value = "meta/init-interface-report.md")]
-        report: PathBuf,
+        /// Path to interface report file. Defaults to auto fallback between init and merge reports.
+        #[arg(long, short = 'r')]
+        report: Option<PathBuf>,
     },
     /// Scan Rust tests and classify as ST / DT, then match interface symbols.
     Scan {
-        /// Path to interface report file.
-        #[arg(long, short = 'r', default_value = "meta/init-interface-report.md")]
-        report: PathBuf,
+        /// Path to interface report file. Defaults to auto fallback between init and merge reports.
+        #[arg(long, short = 'r')]
+        report: Option<PathBuf>,
         /// Root directory to recursively scan for Rust tests.
         #[arg(long = "dir", short = 'd', default_value = ".")]
         rust_root: PathBuf,
+        /// Output file path for scan report.
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
     },
     /// Print ST/DT coverage matrix for each interface symbol in Markdown.
     Coverage {
-        /// Path to interface report file.
-        #[arg(long, short = 'r', default_value = "meta/init-interface-report.md")]
-        report: PathBuf,
+        /// Path to interface report file. Defaults to auto fallback between init and merge reports.
+        #[arg(long, short = 'r')]
+        report: Option<PathBuf>,
         /// Root directory to recursively scan for Rust tests.
         #[arg(long = "dir", short = 'd', default_value = ".")]
         rust_root: PathBuf,
+        /// Output file path for coverage report.
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
     },
 }
 
@@ -56,10 +67,63 @@ fn main() {
 
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Command::Interface { report } => cmd_interface(&report),
-        Command::Scan { report, rust_root } => cmd_scan(&report, &rust_root),
-        Command::Coverage { report, rust_root } => cmd_coverage(&report, &rust_root),
+        Command::Interface { report } => {
+            let report_path = resolve_report_path(report)?;
+            cmd_interface(&report_path)
+        }
+        Command::Scan {
+            report,
+            rust_root,
+            output,
+        } => {
+            let report_path = resolve_report_path(report)?;
+            let output_path = resolve_output_path(&report_path, output, SCAN_OUTPUT_FILE);
+            cmd_scan(&report_path, &rust_root, &output_path)
+        }
+        Command::Coverage {
+            report,
+            rust_root,
+            output,
+        } => {
+            let report_path = resolve_report_path(report)?;
+            let output_path = resolve_output_path(&report_path, output, COVERAGE_OUTPUT_FILE);
+            cmd_coverage(&report_path, &rust_root, &output_path)
+        }
     }
+}
+
+fn resolve_report_path(report: Option<PathBuf>) -> Result<PathBuf> {
+    if let Some(path) = report {
+        return Ok(path);
+    }
+    let current_dir = std::env::current_dir().context("reading current working directory")?;
+    resolve_default_report_path(&current_dir)
+}
+
+fn resolve_default_report_path(current_dir: &Path) -> Result<PathBuf> {
+    let init = current_dir.join(INIT_REPORT_PATH);
+    if init.exists() {
+        return Ok(PathBuf::from(INIT_REPORT_PATH));
+    }
+    let merge = current_dir.join(MERGE_REPORT_PATH);
+    if merge.exists() {
+        return Ok(PathBuf::from(MERGE_REPORT_PATH));
+    }
+    anyhow::bail!(
+        "interface report not found: tried {} and {}",
+        INIT_REPORT_PATH,
+        MERGE_REPORT_PATH
+    );
+}
+
+fn resolve_output_path(report_path: &Path, output: Option<PathBuf>, default_file_name: &str) -> PathBuf {
+    if let Some(path) = output {
+        return path;
+    }
+    report_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(default_file_name)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,17 +177,21 @@ fn cmd_interface(report_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_scan(report_path: &Path, rust_root: &Path) -> Result<()> {
+fn cmd_scan(report_path: &Path, rust_root: &Path, output_path: &Path) -> Result<()> {
     let symbols = load_interface_symbols(report_path)?;
     let tests = scan_rust_tests(rust_root, &symbols)?;
-    print_scan_results(&tests);
+    let report = render_scan_results(&tests);
+    print!("{report}");
+    write_output(output_path, &report)?;
     Ok(())
 }
 
-fn cmd_coverage(report_path: &Path, rust_root: &Path) -> Result<()> {
+fn cmd_coverage(report_path: &Path, rust_root: &Path, output_path: &Path) -> Result<()> {
     let symbols = load_interface_symbols(report_path)?;
     let tests = scan_rust_tests(rust_root, &symbols)?;
-    print_coverage_matrix(&symbols, &tests);
+    let report = render_coverage_matrix(&symbols, &tests);
+    print!("{report}");
+    write_output(output_path, &report)?;
     Ok(())
 }
 
@@ -135,6 +203,16 @@ fn load_interface_symbols(report_path: &Path) -> Result<Vec<InterfaceSymbol>> {
 }
 
 fn parse_interface_report(content: &str) -> Result<Vec<InterfaceSymbol>> {
+    let first_non_empty_line = content.lines().find(|line| !line.trim().is_empty());
+    if let Some(line) = first_non_empty_line {
+        if line.trim().starts_with("# Merge Interface Report") {
+            return parse_merge_report(content);
+        }
+    }
+    parse_init_report(content)
+}
+
+fn parse_init_report(content: &str) -> Result<Vec<InterfaceSymbol>> {
     let section_re = Regex::new(r"^##\s+(.+)$")?;
     let symbol_re = Regex::new(r"^###\s+`([^`]+)`\s+\((function|variable)\)\s*$")?;
     let mut symbols = Vec::new();
@@ -163,6 +241,67 @@ fn parse_interface_report(content: &str) -> Result<Vec<InterfaceSymbol>> {
                     "variable" => SymbolKind::Variable,
                     _ => continue,
                 };
+                symbols.push(InterfaceSymbol {
+                    module: module.clone(),
+                    name: caps[1].trim().to_string(),
+                    kind,
+                });
+            }
+        }
+    }
+
+    symbols.sort_by(|a, b| {
+        a.module
+            .cmp(&b.module)
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.kind.as_str().cmp(b.kind.as_str()))
+    });
+    Ok(symbols)
+}
+
+fn parse_merge_report(content: &str) -> Result<Vec<InterfaceSymbol>> {
+    let section_re = Regex::new(r"^##\s+(.+)$")?;
+    let sub_section_re = Regex::new(r"^###\s+(.+)$")?;
+    let list_symbol_re = Regex::new(r"^- `([^`]+)`\s*$")?;
+    let mut symbols = Vec::new();
+    let mut current_module: Option<String> = None;
+    let mut current_sub_section: Option<SymbolKind> = None;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "*(none)*" {
+            continue;
+        }
+        if let Some(caps) = section_re.captures(trimmed) {
+            let section_name = caps[1].trim();
+            let lowered = section_name.to_ascii_lowercase().replace('`', "");
+            if lowered == "summary" {
+                current_module = None;
+                current_sub_section = None;
+                continue;
+            }
+            if lowered.starts_with("lib.rs") {
+                current_module = Some("lib.rs".to_string());
+                current_sub_section = Some(SymbolKind::Function);
+                continue;
+            }
+            current_module = Some(section_name.to_string());
+            current_sub_section = None;
+            continue;
+        }
+        if let Some(caps) = sub_section_re.captures(trimmed) {
+            let sub_section_name = caps[1].trim().to_ascii_lowercase();
+            current_sub_section = match sub_section_name.as_str() {
+                "final rust functions" => Some(SymbolKind::Function),
+                "final rust variables" => Some(SymbolKind::Variable),
+                // These merge report subsections are metadata and do not define exported symbols.
+                "module-local ffi" | "source files merged" => None,
+                _ => current_sub_section,
+            };
+            continue;
+        }
+        if let Some(caps) = list_symbol_re.captures(trimmed) {
+            if let (Some(module), Some(kind)) = (&current_module, current_sub_section) {
                 symbols.push(InterfaceSymbol {
                     module: module.clone(),
                     name: caps[1].trim().to_string(),
@@ -310,11 +449,10 @@ fn match_interfaces(test_source: &str, symbols: &[InterfaceSymbol]) -> Vec<Strin
     matched
 }
 
-fn print_scan_results(tests: &[TestMatch]) {
-    println!("| test | type | file | interfaces |");
-    println!("|---|---|---|---|");
+fn render_scan_results(tests: &[TestMatch]) -> String {
+    let mut output = String::from("# Test Scan Report\n\n## Test Interface Matches\n\n| test | type | file | interfaces |\n|---|---|---|---|\n");
     for test in tests {
-        println!(
+        output.push_str(&format!(
             "| {} | {} | {} | {} |",
             test.name,
             test.kind.as_str(),
@@ -324,13 +462,20 @@ fn print_scan_results(tests: &[TestMatch]) {
             } else {
                 test.interfaces.join(", ")
             }
-        );
+        ));
+        output.push('\n');
     }
+    output
 }
 
-fn print_coverage_matrix(symbols: &[InterfaceSymbol], tests: &[TestMatch]) {
-    println!("| interface | kind | ST | DT |");
-    println!("|---|---|---|---|");
+fn render_coverage_matrix(symbols: &[InterfaceSymbol], tests: &[TestMatch]) -> String {
+    let mut output = String::from(
+        "# Coverage Report\n\n## Coverage Matrix\n\n| interface | kind | ST | DT |\n|---|---|---|---|\n",
+    );
+    let mut uncovered = Vec::new();
+    let mut covered_by_st = 0_usize;
+    let mut covered_by_dt = 0_usize;
+    let mut covered_by_any = 0_usize;
     for symbol in symbols {
         let mut st = Vec::new();
         let mut dt = Vec::new();
@@ -344,10 +489,26 @@ fn print_coverage_matrix(symbols: &[InterfaceSymbol], tests: &[TestMatch]) {
         }
         st.sort();
         dt.sort();
-        println!(
-            "| {}::{} | {} | {} | {} |",
-            symbol.module,
-            symbol.name,
+        let st_covered = !st.is_empty();
+        let dt_covered = !dt.is_empty();
+        if st_covered {
+            covered_by_st += 1;
+        }
+        if dt_covered {
+            covered_by_dt += 1;
+        }
+        if st_covered || dt_covered {
+            covered_by_any += 1;
+        } else {
+            uncovered.push(format!(
+                "{} ({})",
+                format_interface_name(symbol),
+                symbol.kind.as_str()
+            ));
+        }
+        output.push_str(&format!(
+            "| {} | {} | {} | {} |",
+            format_interface_name(symbol),
             symbol.kind.as_str(),
             if st.is_empty() {
                 "❌".to_string()
@@ -359,6 +520,41 @@ fn print_coverage_matrix(symbols: &[InterfaceSymbol], tests: &[TestMatch]) {
             } else {
                 dt.join(", ")
             }
-        );
+        ));
+        output.push('\n');
     }
+    output.push_str("\n## Uncovered Interfaces\n\n");
+    if uncovered.is_empty() {
+        output.push_str("- *(none)*\n");
+    } else {
+        for item in uncovered {
+            output.push_str(&format!("- `{item}`\n"));
+        }
+    }
+    output.push_str("\n## Summary\n\n| metric | value |\n|---|---|\n");
+    output.push_str(&format!("| total interfaces | {} |\n", symbols.len()));
+    output.push_str(&format!("| covered by ST | {} |\n", covered_by_st));
+    output.push_str(&format!("| covered by DT | {} |\n", covered_by_dt));
+    output.push_str(&format!("| covered (ST or DT) | {} |\n", covered_by_any));
+    output.push_str(&format!(
+        "| uncovered | {} |\n",
+        symbols.len().saturating_sub(covered_by_any)
+    ));
+    output
+}
+
+fn format_interface_name(symbol: &InterfaceSymbol) -> String {
+    format!("{}::{}", symbol.module, symbol.name)
+}
+
+fn write_output(path: &Path, content: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("creating output directory {}", parent.display()))?;
+        }
+    }
+    fs::write(path, content).with_context(|| format!("writing output {}", path.display()))?;
+    eprintln!("written: {}", path.display());
+    Ok(())
 }
