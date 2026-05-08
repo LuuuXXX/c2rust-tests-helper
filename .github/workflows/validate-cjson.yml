@@ -4,6 +4,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   validate-cjson:
     runs-on: ubuntu-latest
@@ -29,6 +32,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
+            ~/.cargo/bin
             ~/.cargo/registry
             ~/.cargo/git
             ${{ github.workspace }}/c2rust-demo/target
@@ -38,7 +42,10 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Install bindgen-cli
-        run: cargo install bindgen-cli
+        run: |
+          if ! command -v bindgen >/dev/null 2>&1; then
+            cargo install --locked bindgen-cli
+          fi
 
       - name: Build c2rust-demo
         run: cargo build --release --manifest-path "$GITHUB_WORKSPACE/c2rust-demo/Cargo.toml"
@@ -68,8 +75,11 @@ jobs:
         run: |
           if [ -f /tmp/cjson/.c2rust/default/meta/init-interface-report.md ]; then
             echo "REPORT_PATH=/tmp/cjson/.c2rust/default/meta/init-interface-report.md" >> "$GITHUB_ENV"
-          else
+          elif [ -f /tmp/cjson/.c2rust/default/meta/merge-interface-report.md ]; then
             echo "REPORT_PATH=/tmp/cjson/.c2rust/default/meta/merge-interface-report.md" >> "$GITHUB_ENV"
+          else
+            echo "Expected report file not found: /tmp/cjson/.c2rust/default/meta/init-interface-report.md or /tmp/cjson/.c2rust/default/meta/merge-interface-report.md" >&2
+            exit 1
           fi
 
       - name: Run interface
