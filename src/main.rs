@@ -172,6 +172,7 @@ struct InterfaceSymbol {
 struct CTestCase {
     name: String,
     file: PathBuf,
+    body: String,
 }
 
 fn cmd_interface(report_path: &Path) -> Result<()> {
@@ -347,15 +348,49 @@ fn discover_c_tests(c_test_root: &Path) -> Result<Vec<CTestCase>> {
         let content = fs::read_to_string(&file)
             .with_context(|| format!("reading C source {}", file.display()))?;
         for caps in test_fn_re.captures_iter(&content) {
+            let name = caps[1].to_string();
+            let after_match = caps.get(0).unwrap().end();
+            let body = extract_function_body(&content[after_match..]);
             tests.push(CTestCase {
-                name: caps[1].to_string(),
+                name,
                 file: file.clone(),
+                body,
             });
         }
     }
 
     tests.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.file.cmp(&b.file)));
     Ok(tests)
+}
+
+fn extract_function_body(src: &str) -> String {
+    let mut depth = 0_usize;
+    let mut in_body = false;
+    let mut body = String::new();
+    for ch in src.chars() {
+        match ch {
+            '{' => {
+                depth += 1;
+                in_body = true;
+                body.push(ch);
+            }
+            '}' => {
+                if depth > 0 {
+                    depth -= 1;
+                    body.push(ch);
+                    if depth == 0 {
+                        break;
+                    }
+                }
+            }
+            _ => {
+                if in_body {
+                    body.push(ch);
+                }
+            }
+        }
+    }
+    body
 }
 
 fn collect_c_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
@@ -426,8 +461,7 @@ fn render_map_report(c_test_root: &Path, tests: &[CTestCase], symbols: &[Interfa
     output.push_str("| test function | file | candidate symbols |\n|---|---|---|\n");
 
     for test in tests {
-        let content = fs::read_to_string(&test.file).unwrap_or_default();
-        let candidates = infer_candidate_symbols(&format!("{}\n{}", test.name, content), symbols);
+        let candidates = infer_candidate_symbols(&format!("{}\n{}", test.name, test.body), symbols);
         output.push_str(&format!(
             "| {} | {} | {} |\n",
             test.name,

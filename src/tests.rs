@@ -404,3 +404,67 @@ fn test_infer_candidate_symbols_word_boundary() {
     assert!(candidates.contains(&"counter".to_string()));
 }
 
+#[test]
+fn test_extract_function_body() {
+    // Basic: body is extracted between the braces that follow the match position
+    let body = crate::extract_function_body("(void) {\n    add(1, 2);\n}\n");
+    assert!(body.contains("add(1, 2);"));
+    assert!(!body.contains("extra_fn"));
+
+    // Nested braces are handled correctly
+    let body = crate::extract_function_body("(void) { if (1) { add(); } }\n");
+    assert!(body.contains("add();"));
+}
+
+#[test]
+fn test_map_uses_per_function_body_not_whole_file() {
+    let dir = create_temp_dir("map-isolation");
+    let c_dir = dir.path().join("tests");
+    fs::create_dir_all(&c_dir).unwrap();
+
+    // One file with two test functions: each calls a different symbol.
+    fs::write(
+        c_dir.join("test_mixed.c"),
+        r#"
+void test_uses_add(void) {
+    assert(add(1, 2) == 3);
+}
+
+void test_uses_counter(void) {
+    counter = 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let symbols = vec![
+        crate::InterfaceSymbol {
+            module: "mod".to_string(),
+            name: "add".to_string(),
+            kind: crate::SymbolKind::Function,
+        },
+        crate::InterfaceSymbol {
+            module: "mod".to_string(),
+            name: "counter".to_string(),
+            kind: crate::SymbolKind::Variable,
+        },
+    ];
+
+    let found = crate::discover_c_tests(c_dir.as_path()).unwrap();
+    assert_eq!(found.len(), 2);
+
+    let test_add = found.iter().find(|t| t.name == "test_uses_add").unwrap();
+    let test_counter = found.iter().find(|t| t.name == "test_uses_counter").unwrap();
+
+    let add_candidates = crate::infer_candidate_symbols(&test_add.body, &symbols);
+    let counter_candidates = crate::infer_candidate_symbols(&test_counter.body, &symbols);
+
+    // test_uses_add should only match "add", not "counter"
+    assert!(add_candidates.contains(&"add".to_string()));
+    assert!(!add_candidates.contains(&"counter".to_string()));
+
+    // test_uses_counter should only match "counter", not "add"
+    assert!(counter_candidates.contains(&"counter".to_string()));
+    assert!(!counter_candidates.contains(&"add".to_string()));
+}
+
