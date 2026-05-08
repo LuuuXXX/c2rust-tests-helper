@@ -45,8 +45,10 @@ export PATH="$PWD/target/release:$PATH"
 
 1. `meta/init-interface-report.md`
 2. `meta/merge-interface-report.md`
+3. `.c2rust/<feature>/meta/init-interface-report.md`（按 feature 名字排序）
+4. `.c2rust/<feature>/meta/merge-interface-report.md`（按 feature 名字排序）
 
-若两者都不存在则报错；若显式传入 `--report <path>`，则直接使用该路径。
+若都不存在则报错；若显式传入 `--report <path>`，则直接使用该路径。
 
 ## 输出文件
 
