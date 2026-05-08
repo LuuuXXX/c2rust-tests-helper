@@ -56,7 +56,7 @@ jobs:
       - name: Run c2rust-demo init on cJSON
         working-directory: /tmp/cjson
         run: |
-          "$GITHUB_WORKSPACE/c2rust-demo/target/release/c2rust-demo" init -- gcc -c cJSON.c -I.
+          "$GITHUB_WORKSPACE/c2rust-demo/target/release/c2rust-demo" init -- gcc -c cJSON.c test.c tests/*.c -I. -Itests
 
       - name: Run c2rust-demo merge on cJSON
         working-directory: /tmp/cjson
@@ -85,10 +85,19 @@ jobs:
       - name: Run interface
         run: |
           "$GITHUB_WORKSPACE/target/release/c2rust-tests-helper" interface \
-            --report "$REPORT_PATH"
+            --report "$REPORT_PATH" | tee /tmp/interface-output.txt
+          test -s /tmp/interface-output.txt
 
       - name: Run scan
         run: |
           "$GITHUB_WORKSPACE/target/release/c2rust-tests-helper" scan \
             --report "$REPORT_PATH" \
-            --dir /tmp/cjson/.c2rust/default/rust
+            --dir /tmp/cjson/.c2rust/default/rust | tee /tmp/scan-output.txt
+          awk '/^\|/ {count++} END {exit(count > 2 ? 0 : 1)}' /tmp/scan-output.txt
+
+      - name: Run coverage
+        run: |
+          "$GITHUB_WORKSPACE/target/release/c2rust-tests-helper" coverage \
+            --report "$REPORT_PATH" \
+            --dir /tmp/cjson/.c2rust/default/rust | tee /tmp/coverage-output.txt
+          awk '/^\|/ {count++} END {exit(count > 2 ? 0 : 1)}' /tmp/coverage-output.txt
