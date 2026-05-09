@@ -9,13 +9,13 @@ use std::path::{Path, PathBuf};
 
 const INIT_REPORT_PATH: &str = "meta/init-interface-report.md";
 const MERGE_REPORT_PATH: &str = "meta/merge-interface-report.md";
-const SCAN_OUTPUT_FILE: &str = "test-scan-report.md";
-const COVERAGE_OUTPUT_FILE: &str = "coverage-report.md";
+const DISCOVER_OUTPUT_FILE: &str = "c-test-discovery-report.md";
+const MAP_OUTPUT_FILE: &str = "c-test-map-report.md";
 
 #[derive(Parser)]
 #[command(
     name = "c2rust-tests-helper",
-    about = "Interface and test coverage helper for c2rust-demo translation outputs",
+    about = "C test discovery and interface candidate mapping helper for c2rust-demo translation outputs",
     version
 )]
 struct Cli {
@@ -31,27 +31,24 @@ enum Command {
         #[arg(long, short = 'r')]
         report: Option<PathBuf>,
     },
-    /// Scan Rust tests and classify as ST / DT, then match interface symbols.
-    Scan {
-        /// Path to interface report file. Defaults to auto fallback between init and merge reports.
-        #[arg(long, short = 'r')]
-        report: Option<PathBuf>,
-        /// Root directory to recursively scan for Rust tests.
+    /// Scan C source files for test functions and output a discovery report.
+    Discover {
+        /// Root directory to recursively scan for C test files.
         #[arg(long = "dir", short = 'd', default_value = ".")]
-        rust_root: PathBuf,
-        /// Output file path for scan report.
+        c_test_root: PathBuf,
+        /// Output file path for the discovery report.
         #[arg(long, short = 'o')]
         output: Option<PathBuf>,
     },
-    /// Print ST/DT coverage matrix for each interface symbol in Markdown.
-    Coverage {
+    /// Map discovered C tests to candidate interface symbols.
+    Map {
         /// Path to interface report file. Defaults to auto fallback between init and merge reports.
         #[arg(long, short = 'r')]
         report: Option<PathBuf>,
-        /// Root directory to recursively scan for Rust tests.
+        /// Root directory to recursively scan for C test files.
         #[arg(long = "dir", short = 'd', default_value = ".")]
-        rust_root: PathBuf,
-        /// Output file path for coverage report.
+        c_test_root: PathBuf,
+        /// Output file path for the mapping report.
         #[arg(long, short = 'o')]
         output: Option<PathBuf>,
     },
@@ -71,23 +68,18 @@ fn run(cli: Cli) -> Result<()> {
             let report_path = resolve_report_path(report)?;
             cmd_interface(&report_path)
         }
-        Command::Scan {
-            report,
-            rust_root,
-            output,
-        } => {
-            let report_path = resolve_report_path(report)?;
-            let output_path = resolve_output_path(&report_path, output, SCAN_OUTPUT_FILE);
-            cmd_scan(&report_path, &rust_root, &output_path)
+        Command::Discover { c_test_root, output } => {
+            let output_path = resolve_output_path_direct(output, DISCOVER_OUTPUT_FILE);
+            cmd_discover(&c_test_root, &output_path)
         }
-        Command::Coverage {
+        Command::Map {
             report,
-            rust_root,
+            c_test_root,
             output,
         } => {
             let report_path = resolve_report_path(report)?;
-            let output_path = resolve_output_path(&report_path, output, COVERAGE_OUTPUT_FILE);
-            cmd_coverage(&report_path, &rust_root, &output_path)
+            let output_path = resolve_output_path(&report_path, output, MAP_OUTPUT_FILE);
+            cmd_map(&report_path, &c_test_root, &output_path)
         }
     }
 }
@@ -150,6 +142,10 @@ fn resolve_output_path(report_path: &Path, output: Option<PathBuf>, default_file
         .join(default_file_name)
 }
 
+fn resolve_output_path_direct(output: Option<PathBuf>, default_file_name: &str) -> PathBuf {
+    output.unwrap_or_else(|| PathBuf::from(default_file_name))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SymbolKind {
     Function,
@@ -172,27 +168,11 @@ struct InterfaceSymbol {
     kind: SymbolKind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TestKind {
-    St,
-    Dt,
-}
-
-impl TestKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::St => "ST",
-            Self::Dt => "DT",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct TestMatch {
+struct CTestCase {
     name: String,
-    kind: TestKind,
     file: PathBuf,
-    interfaces: Vec<String>,
+    body: String,
 }
 
 fn cmd_interface(report_path: &Path) -> Result<()> {
@@ -201,19 +181,18 @@ fn cmd_interface(report_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_scan(report_path: &Path, rust_root: &Path, output_path: &Path) -> Result<()> {
-    let symbols = load_interface_symbols(report_path)?;
-    let tests = scan_rust_tests(rust_root, &symbols)?;
-    let report = render_scan_results(&tests);
+fn cmd_discover(c_test_root: &Path, output_path: &Path) -> Result<()> {
+    let tests = discover_c_tests(c_test_root)?;
+    let report = render_discovery_report(c_test_root, &tests);
     print!("{report}");
     write_output(output_path, &report)?;
     Ok(())
 }
 
-fn cmd_coverage(report_path: &Path, rust_root: &Path, output_path: &Path) -> Result<()> {
+fn cmd_map(report_path: &Path, c_test_root: &Path, output_path: &Path) -> Result<()> {
     let symbols = load_interface_symbols(report_path)?;
-    let tests = scan_rust_tests(rust_root, &symbols)?;
-    let report = render_coverage_matrix(&symbols, &tests);
+    let tests = discover_c_tests(c_test_root)?;
+    let report = render_map_report(c_test_root, &tests, &symbols);
     print!("{report}");
     write_output(output_path, &report)?;
     Ok(())
@@ -357,67 +336,26 @@ fn print_interface_symbols(symbols: &[InterfaceSymbol]) {
     }
 }
 
-fn scan_rust_tests(rust_root: &Path, symbols: &[InterfaceSymbol]) -> Result<Vec<TestMatch>> {
-    let mut rs_files = Vec::new();
-    collect_rs_files(rust_root, &mut rs_files)?;
-    rs_files.sort();
+fn discover_c_tests(c_test_root: &Path) -> Result<Vec<CTestCase>> {
+    let mut c_files = Vec::new();
+    collect_c_files(c_test_root, &mut c_files)?;
+    c_files.sort();
 
-    let fn_re = Regex::new(r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)")?;
+    let test_fn_re = Regex::new(r"(?m)^(?:void|int)\s+(test_[A-Za-z0-9_]+)\s*\(")?;
     let mut tests = Vec::new();
 
-    for file in rs_files {
+    for file in c_files {
         let content = fs::read_to_string(&file)
-            .with_context(|| format!("reading Rust source {}", file.display()))?;
-        let mut lines = content.lines().peekable();
-        let mut has_test_attr = false;
-
-        while let Some(line) = lines.next() {
-            let trimmed = line.trim();
-            if trimmed == "#[test]" {
-                has_test_attr = true;
-                continue;
-            }
-            if has_test_attr && trimmed.starts_with("#[") {
-                continue;
-            }
-            if has_test_attr && trimmed.contains("fn ") {
-                if let Some(caps) = fn_re.captures(trimmed) {
-                    let name = caps[1].to_string();
-                    let mut body = String::new();
-                    let mut brace_depth = 0_usize;
-
-                    if let Some(open_idx) = line.find('{') {
-                        brace_depth = 1;
-                        body.push_str(&line[open_idx + 1..]);
-                        body.push('\n');
-                    }
-
-                    while brace_depth > 0 {
-                        let Some(next_line) = lines.next() else {
-                            break;
-                        };
-                        let opens = next_line.chars().filter(|c| *c == '{').count();
-                        let closes = next_line.chars().filter(|c| *c == '}').count();
-                        brace_depth = brace_depth.saturating_add(opens).saturating_sub(closes);
-                        body.push_str(next_line);
-                        body.push('\n');
-                    }
-
-                    let kind = classify_test(&file);
-                    let interfaces = match_interfaces(&format!("{name}\n{body}"), symbols);
-                    tests.push(TestMatch {
-                        name,
-                        kind,
-                        file: file.clone(),
-                        interfaces,
-                    });
-                }
-                has_test_attr = false;
-                continue;
-            }
-            if has_test_attr && !trimmed.is_empty() {
-                has_test_attr = false;
-            }
+            .with_context(|| format!("reading C source {}", file.display()))?;
+        for caps in test_fn_re.captures_iter(&content) {
+            let name = caps[1].to_string();
+            let after_match = caps.get(0).unwrap().end();
+            let body = extract_function_body(&content[after_match..]);
+            tests.push(CTestCase {
+                name,
+                file: file.clone(),
+                body,
+            });
         }
     }
 
@@ -425,9 +363,39 @@ fn scan_rust_tests(rust_root: &Path, symbols: &[InterfaceSymbol]) -> Result<Vec<
     Ok(tests)
 }
 
-fn collect_rs_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+fn extract_function_body(src: &str) -> String {
+    let mut depth = 0_usize;
+    let mut in_body = false;
+    let mut body = String::new();
+    for ch in src.chars() {
+        match ch {
+            '{' => {
+                depth += 1;
+                in_body = true;
+                body.push(ch);
+            }
+            '}' => {
+                if depth > 0 {
+                    depth -= 1;
+                    body.push(ch);
+                    if depth == 0 {
+                        break;
+                    }
+                }
+            }
+            _ => {
+                if in_body {
+                    body.push(ch);
+                }
+            }
+        }
+    }
+    body
+}
+
+fn collect_c_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     if root.is_file() {
-        if root.extension().and_then(|e| e.to_str()) == Some("rs") {
+        if root.extension().and_then(|e| e.to_str()) == Some("c") {
             out.push(root.to_path_buf());
         }
         return Ok(());
@@ -441,134 +409,77 @@ fn collect_rs_files(root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
             {
                 continue;
             }
-            collect_rs_files(&path, out)?;
-        } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            collect_c_files(&path, out)?;
+        } else if path.extension().and_then(|e| e.to_str()) == Some("c") {
             out.push(path);
         }
     }
     Ok(())
 }
 
-fn classify_test(file: &Path) -> TestKind {
-    let path = file.to_string_lossy().to_ascii_lowercase();
-    if path.contains("/tests/") || path.contains("\\tests\\") {
-        TestKind::St
-    } else {
-        TestKind::Dt
-    }
-}
-
-fn match_interfaces(test_source: &str, symbols: &[InterfaceSymbol]) -> Vec<String> {
-    let mut matched = Vec::new();
+fn infer_candidate_symbols(test_source: &str, symbols: &[InterfaceSymbol]) -> Vec<String> {
+    let mut candidates = Vec::new();
     for symbol in symbols {
         let pattern = format!(r"\b{}\b", regex::escape(&symbol.name));
         if let Ok(re) = Regex::new(&pattern) {
             if re.is_match(test_source) {
-                matched.push(symbol.name.clone());
+                candidates.push(symbol.name.clone());
             }
         }
     }
-    matched.sort();
-    matched.dedup();
-    matched
+    candidates.sort();
+    candidates.dedup();
+    candidates
 }
 
-fn render_scan_results(tests: &[TestMatch]) -> String {
-    let mut output = String::from("# Test Scan Report\n\n## Test Interface Matches\n\n| test | type | file | interfaces |\n|---|---|---|---|\n");
+fn render_discovery_report(c_test_root: &Path, tests: &[CTestCase]) -> String {
+    let mut output = String::from("# C Test Discovery Report\n\n");
+    output.push_str(&format!(
+        "Scanned: `{}`\n\n",
+        c_test_root.display()
+    ));
+    output.push_str("## Discovered Test Functions\n\n");
+    output.push_str("| test function | file |\n|---|---|\n");
     for test in tests {
         output.push_str(&format!(
-            "| {} | {} | {} | {} |",
+            "| {} | {} |\n",
             test.name,
-            test.kind.as_str(),
+            test.file.display()
+        ));
+    }
+    output.push_str(&format!("\n## Summary\n\n| metric | value |\n|---|---|\n| total C tests | {} |\n", tests.len()));
+    output
+}
+
+fn render_map_report(c_test_root: &Path, tests: &[CTestCase], symbols: &[InterfaceSymbol]) -> String {
+    let mut output = String::from("# C Test to Interface Candidate Mapping Report\n\n");
+    output.push_str(&format!(
+        "Scanned: `{}`\n\n",
+        c_test_root.display()
+    ));
+    output.push_str("## Candidate Mappings\n\n");
+    output.push_str("| test function | file | candidate symbols |\n|---|---|---|\n");
+
+    for test in tests {
+        let candidates = infer_candidate_symbols(&format!("{}\n{}", test.name, test.body), symbols);
+        output.push_str(&format!(
+            "| {} | {} | {} |\n",
+            test.name,
             test.file.display(),
-            if test.interfaces.is_empty() {
+            if candidates.is_empty() {
                 "-".to_string()
             } else {
-                test.interfaces.join(", ")
+                candidates.join(", ")
             }
         ));
-        output.push('\n');
     }
-    output
-}
 
-fn render_coverage_matrix(symbols: &[InterfaceSymbol], tests: &[TestMatch]) -> String {
-    let mut output = String::from(
-        "# Coverage Report\n\n## Coverage Matrix\n\n| interface | kind | ST | DT |\n|---|---|---|---|\n",
-    );
-    let mut uncovered = Vec::new();
-    let mut covered_by_st = 0_usize;
-    let mut covered_by_dt = 0_usize;
-    let mut covered_by_any = 0_usize;
-    for symbol in symbols {
-        let mut st = Vec::new();
-        let mut dt = Vec::new();
-        for test in tests {
-            if test.interfaces.iter().any(|name| name == &symbol.name) {
-                match test.kind {
-                    TestKind::St => st.push(test.name.clone()),
-                    TestKind::Dt => dt.push(test.name.clone()),
-                }
-            }
-        }
-        st.sort();
-        dt.sort();
-        let st_covered = !st.is_empty();
-        let dt_covered = !dt.is_empty();
-        if st_covered {
-            covered_by_st += 1;
-        }
-        if dt_covered {
-            covered_by_dt += 1;
-        }
-        if st_covered || dt_covered {
-            covered_by_any += 1;
-        } else {
-            uncovered.push(format!(
-                "{} ({})",
-                format_interface_name(symbol),
-                symbol.kind.as_str()
-            ));
-        }
-        output.push_str(&format!(
-            "| {} | {} | {} | {} |",
-            format_interface_name(symbol),
-            symbol.kind.as_str(),
-            if st.is_empty() {
-                "❌".to_string()
-            } else {
-                st.join(", ")
-            },
-            if dt.is_empty() {
-                "❌".to_string()
-            } else {
-                dt.join(", ")
-            }
-        ));
-        output.push('\n');
-    }
-    output.push_str("\n## Uncovered Interfaces\n\n");
-    if uncovered.is_empty() {
-        output.push_str("- *(none)*\n");
-    } else {
-        for item in uncovered {
-            output.push_str(&format!("- `{item}`\n"));
-        }
-    }
-    output.push_str("\n## Summary\n\n| metric | value |\n|---|---|\n");
-    output.push_str(&format!("| total interfaces | {} |\n", symbols.len()));
-    output.push_str(&format!("| covered by ST | {} |\n", covered_by_st));
-    output.push_str(&format!("| covered by DT | {} |\n", covered_by_dt));
-    output.push_str(&format!("| covered (ST or DT) | {} |\n", covered_by_any));
     output.push_str(&format!(
-        "| uncovered | {} |\n",
-        symbols.len().saturating_sub(covered_by_any)
+        "\n## Summary\n\n| metric | value |\n|---|---|\n| total C tests | {} |\n| total interface symbols | {} |\n",
+        tests.len(),
+        symbols.len()
     ));
     output
-}
-
-fn format_interface_name(symbol: &InterfaceSymbol) -> String {
-    format!("{}::{}", symbol.module, symbol.name)
 }
 
 fn write_output(path: &Path, content: &str) -> Result<()> {

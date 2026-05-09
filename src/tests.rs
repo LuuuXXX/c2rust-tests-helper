@@ -30,7 +30,7 @@ fn create_temp_dir(name: &str) -> TempDirGuard {
 }
 
 #[test]
-fn test_cli_accepts_new_commands() {
+fn test_cli_accepts_commands() {
     let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "interface"]).unwrap();
     match cli.command {
         crate::Command::Interface { report } => {
@@ -39,32 +39,30 @@ fn test_cli_accepts_new_commands() {
         _ => panic!("expected interface command"),
     }
 
-    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "scan"]).unwrap();
+    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "discover"]).unwrap();
     match cli.command {
-        crate::Command::Scan {
-            report,
-            rust_root,
+        crate::Command::Discover {
+            c_test_root,
             output,
         } => {
-            assert_eq!(report, None);
-            assert_eq!(rust_root, PathBuf::from("."));
+            assert_eq!(c_test_root, PathBuf::from("."));
             assert_eq!(output, None);
         }
-        _ => panic!("expected scan command"),
+        _ => panic!("expected discover command"),
     }
 
-    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "coverage"]).unwrap();
+    let cli = crate::Cli::try_parse_from(["c2rust-tests-helper", "map"]).unwrap();
     match cli.command {
-        crate::Command::Coverage {
+        crate::Command::Map {
             report,
-            rust_root,
+            c_test_root,
             output,
         } => {
             assert_eq!(report, None);
-            assert_eq!(rust_root, PathBuf::from("."));
+            assert_eq!(c_test_root, PathBuf::from("."));
             assert_eq!(output, None);
         }
-        _ => panic!("expected coverage command"),
+        _ => panic!("expected map command"),
     }
 }
 
@@ -73,6 +71,8 @@ fn test_cli_rejects_legacy_commands() {
     assert!(crate::Cli::try_parse_from(["c2rust-tests-helper", "collect"]).is_err());
     assert!(crate::Cli::try_parse_from(["c2rust-tests-helper", "lint"]).is_err());
     assert!(crate::Cli::try_parse_from(["c2rust-tests-helper", "report"]).is_err());
+    assert!(crate::Cli::try_parse_from(["c2rust-tests-helper", "scan"]).is_err());
+    assert!(crate::Cli::try_parse_from(["c2rust-tests-helper", "coverage"]).is_err());
 }
 
 #[test]
@@ -258,78 +258,77 @@ fn test_resolve_default_report_path_c2rust_prefers_init_over_merge() {
 }
 
 #[test]
-fn test_scan_rust_tests_and_match_interfaces() {
-    let dir = create_temp_dir("scan");
-    let src = dir.path().join("src");
-    let tests = dir.path().join("tests");
-    fs::create_dir_all(&src).unwrap();
-    fs::create_dir_all(&tests).unwrap();
+fn test_discover_c_tests_finds_test_functions() {
+    let dir = create_temp_dir("discover");
+    let tests_dir = dir.path().join("tests");
+    fs::create_dir_all(&tests_dir).unwrap();
 
     fs::write(
-        src.join("unit.rs"),
+        tests_dir.join("test_math.c"),
         r#"
-#[test]
-fn dt_add_works() {
-    assert_eq!(unsafe { add(1, 2) }, 3);
+#include <assert.h>
+
+void test_add(void) {
+    assert(add(1, 2) == 3);
 }
 
-#[test]
-fn system_keyword_in_name_but_unit_test() {
-    assert_eq!(unsafe { add(1, 2) }, 3);
+int test_add_negative(void) {
+    return add(-1, -2) == -3 ? 0 : 1;
 }
+
+static void helper_not_a_test(void) {}
 "#,
     )
     .unwrap();
 
     fs::write(
-        tests.join("system.rs"),
+        tests_dir.join("test_counter.c"),
         r#"
-#[test]
-fn st_counter_smoke() {
-    unsafe { counter = 1; }
+void test_counter_inc(void) {
+    counter = 0;
+    counter_inc();
+    assert(counter == 1);
 }
 "#,
     )
     .unwrap();
 
-    let symbols = vec![
-        crate::InterfaceSymbol {
-            module: "mod_src_foo".to_string(),
-            name: "add".to_string(),
-            kind: crate::SymbolKind::Function,
-        },
-        crate::InterfaceSymbol {
-            module: "mod_src_foo".to_string(),
-            name: "counter".to_string(),
-            kind: crate::SymbolKind::Variable,
-        },
-    ];
+    let found = crate::discover_c_tests(dir.path()).unwrap();
+    assert_eq!(found.len(), 3);
 
-    let scanned = crate::scan_rust_tests(dir.path(), &symbols).unwrap();
-    assert_eq!(scanned.len(), 3);
-
-    let dt = scanned.iter().find(|t| t.name == "dt_add_works").unwrap();
-    assert_eq!(dt.kind, crate::TestKind::Dt);
-    assert_eq!(dt.interfaces, vec!["add".to_string()]);
-
-    let dt_system = scanned
-        .iter()
-        .find(|t| t.name == "system_keyword_in_name_but_unit_test")
-        .unwrap();
-    assert_eq!(dt_system.kind, crate::TestKind::Dt);
-
-    let st = scanned.iter().find(|t| t.name == "st_counter_smoke").unwrap();
-    assert_eq!(st.kind, crate::TestKind::St);
-    assert_eq!(st.interfaces, vec!["counter".to_string()]);
+    let names: Vec<&str> = found.iter().map(|t| t.name.as_str()).collect();
+    assert!(names.contains(&"test_add"));
+    assert!(names.contains(&"test_add_negative"));
+    assert!(names.contains(&"test_counter_inc"));
+    assert!(!names.contains(&"helper_not_a_test"));
 }
 
 #[test]
-fn test_scan_and_coverage_write_reports() {
+fn test_discover_c_tests_ignores_non_c_files() {
+    let dir = create_temp_dir("discover-ext");
+    fs::write(
+        dir.path().join("test_foo.rs"),
+        "fn test_foo() {}",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("test_bar.c"),
+        "void test_bar(void) {}\n",
+    )
+    .unwrap();
+
+    let found = crate::discover_c_tests(dir.path()).unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].name, "test_bar");
+}
+
+#[test]
+fn test_discover_and_map_write_reports() {
     let dir = create_temp_dir("write-report");
     let meta = dir.path().join("meta");
-    let rust_dir = dir.path().join("rust");
+    let c_dir = dir.path().join("tests").join("c");
     fs::create_dir_all(&meta).unwrap();
-    fs::create_dir_all(&rust_dir).unwrap();
+    fs::create_dir_all(&c_dir).unwrap();
 
     fs::write(
         meta.join("init-interface-report.md"),
@@ -344,65 +343,128 @@ fn test_scan_and_coverage_write_reports() {
     .unwrap();
 
     fs::write(
-        rust_dir.join("mod.rs"),
+        c_dir.join("test_math.c"),
         r#"
-#[test]
-fn dt_add_smoke() {
-    unsafe { add(1, 2); }
+void test_add_smoke(void) {
+    assert(add(1, 2) == 3);
 }
 "#,
     )
     .unwrap();
 
     let report_path = meta.join("init-interface-report.md");
-    let scan_output_path = crate::resolve_output_path(&report_path, None, "test-scan-report.md");
-    let coverage_output_path = crate::resolve_output_path(&report_path, None, "coverage-report.md");
+    let discover_output = meta.join("c-test-discovery-report.md");
+    let map_output = meta.join("c-test-map-report.md");
 
-    crate::cmd_scan(&report_path, &rust_dir, &scan_output_path).unwrap();
-    crate::cmd_coverage(&report_path, &rust_dir, &coverage_output_path).unwrap();
+    crate::cmd_discover(&c_dir, &discover_output).unwrap();
+    crate::cmd_map(&report_path, &c_dir, &map_output).unwrap();
 
-    let scan_output = fs::read_to_string(meta.join("test-scan-report.md")).unwrap();
-    assert!(scan_output.contains("# Test Scan Report"));
-    assert!(scan_output.contains("| test | type | file | interfaces |"));
-    assert!(scan_output.contains("dt_add_smoke"));
+    let discovery = fs::read_to_string(&discover_output).unwrap();
+    assert!(discovery.contains("# C Test Discovery Report"));
+    assert!(discovery.contains("| test function | file |"));
+    assert!(discovery.contains("test_add_smoke"));
+    assert!(discovery.contains("| total C tests | 1 |"));
 
-    let coverage_output = fs::read_to_string(meta.join("coverage-report.md")).unwrap();
-    assert!(coverage_output.contains("# Coverage Report"));
-    assert!(coverage_output.contains("| interface | kind | ST | DT |"));
-    assert!(coverage_output.contains("mod_src_foo::add"));
-    assert!(coverage_output.contains("## Uncovered Interfaces"));
-    assert!(coverage_output.contains("- *(none)*"));
-    assert!(coverage_output.contains("## Summary"));
-    assert!(coverage_output.contains("| total interfaces | 1 |"));
-    assert!(coverage_output.contains("| covered by DT | 1 |"));
+    let mapping = fs::read_to_string(&map_output).unwrap();
+    assert!(mapping.contains("# C Test to Interface Candidate Mapping Report"));
+    assert!(mapping.contains("| test function | file | candidate symbols |"));
+    assert!(mapping.contains("test_add_smoke"));
+    assert!(mapping.contains("add"));
+    assert!(mapping.contains("| total C tests | 1 |"));
+    assert!(mapping.contains("| total interface symbols | 1 |"));
 }
 
 #[test]
-fn test_coverage_report_includes_uncovered_list_and_summary() {
+fn test_infer_candidate_symbols_word_boundary() {
     let symbols = vec![
         crate::InterfaceSymbol {
-            module: "m".to_string(),
-            name: "covered".to_string(),
+            module: "mod_src_foo".to_string(),
+            name: "add".to_string(),
             kind: crate::SymbolKind::Function,
         },
         crate::InterfaceSymbol {
-            module: "m".to_string(),
-            name: "uncovered".to_string(),
+            module: "mod_src_foo".to_string(),
+            name: "counter".to_string(),
             kind: crate::SymbolKind::Variable,
         },
     ];
-    let tests = vec![crate::TestMatch {
-        name: "dt_covered".to_string(),
-        kind: crate::TestKind::Dt,
-        file: PathBuf::from("src/mod.rs"),
-        interfaces: vec!["covered".to_string()],
-    }];
 
-    let report = crate::render_coverage_matrix(&symbols, &tests);
-    assert!(report.contains("## Uncovered Interfaces"));
-    assert!(report.contains("- `m::uncovered (variable)`"));
-    assert!(report.contains("## Summary"));
-    assert!(report.contains("| total interfaces | 2 |"));
-    assert!(report.contains("| covered by DT | 1 |"));
-    assert!(report.contains("| uncovered | 1 |"));
+    // "add" appears as a whole word
+    let candidates = crate::infer_candidate_symbols("test_add\nassert(add(1,2) == 3);", &symbols);
+    assert!(candidates.contains(&"add".to_string()));
+    assert!(!candidates.contains(&"counter".to_string()));
+
+    // "add" as a substring should NOT match "add_extra"
+    let candidates = crate::infer_candidate_symbols("add_extra(1);", &symbols);
+    assert!(!candidates.contains(&"add".to_string()));
+
+    // both symbols present
+    let candidates = crate::infer_candidate_symbols("add(1); counter = 0;", &symbols);
+    assert!(candidates.contains(&"add".to_string()));
+    assert!(candidates.contains(&"counter".to_string()));
 }
+
+#[test]
+fn test_extract_function_body() {
+    // Basic: body is extracted between the braces that follow the match position
+    let body = crate::extract_function_body("(void) {\n    add(1, 2);\n}\n");
+    assert!(body.contains("add(1, 2);"));
+    assert!(!body.contains("extra_fn"));
+
+    // Nested braces are handled correctly
+    let body = crate::extract_function_body("(void) { if (1) { add(); } }\n");
+    assert!(body.contains("add();"));
+}
+
+#[test]
+fn test_map_uses_per_function_body_not_whole_file() {
+    let dir = create_temp_dir("map-isolation");
+    let c_dir = dir.path().join("tests");
+    fs::create_dir_all(&c_dir).unwrap();
+
+    // One file with two test functions: each calls a different symbol.
+    fs::write(
+        c_dir.join("test_mixed.c"),
+        r#"
+void test_uses_add(void) {
+    assert(add(1, 2) == 3);
+}
+
+void test_uses_counter(void) {
+    counter = 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let symbols = vec![
+        crate::InterfaceSymbol {
+            module: "mod".to_string(),
+            name: "add".to_string(),
+            kind: crate::SymbolKind::Function,
+        },
+        crate::InterfaceSymbol {
+            module: "mod".to_string(),
+            name: "counter".to_string(),
+            kind: crate::SymbolKind::Variable,
+        },
+    ];
+
+    let found = crate::discover_c_tests(c_dir.as_path()).unwrap();
+    assert_eq!(found.len(), 2);
+
+    let test_add = found.iter().find(|t| t.name == "test_uses_add").unwrap();
+    let test_counter = found.iter().find(|t| t.name == "test_uses_counter").unwrap();
+
+    let add_candidates = crate::infer_candidate_symbols(&test_add.body, &symbols);
+    let counter_candidates = crate::infer_candidate_symbols(&test_counter.body, &symbols);
+
+    // test_uses_add should only match "add", not "counter"
+    assert!(add_candidates.contains(&"add".to_string()));
+    assert!(!add_candidates.contains(&"counter".to_string()));
+
+    // test_uses_counter should only match "counter", not "add"
+    assert!(counter_candidates.contains(&"counter".to_string()));
+    assert!(!counter_candidates.contains(&"add".to_string()));
+}
+
